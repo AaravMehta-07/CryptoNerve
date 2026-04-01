@@ -2,16 +2,16 @@
 
 **Self-hosted LLM-powered crypto sentiment & price prediction terminal**
 
-> Track 5 coins in real-time with Reddit/news sentiment (Mistral 7B via Ollama), on-chain whale intelligence, XGBoost/Prophet/LSTM ensemble predictions, and composite trading signals — all on your own hardware.
+> Track 5 coins in real-time with Reddit/news sentiment (local Mistral 7B via llama-cpp-python), on-chain whale intelligence, XGBoost/Prophet/LSTM ensemble predictions, and composite trading signals — all on your own hardware. No cloud LLM fees.
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-Reddit/News → Sentiment (Mistral 7B + FinBERT) ↘
-Binance OHLCV → Technical Indicators           → Ensemble Signals → Streamlit Dashboard
-Etherscan On-Chain → Whale Flow Analysis       ↗
+Reddit/News → Sentiment (Mistral 7B GGUF + FinBERT) ↘
+Binance OHLCV → Technical Indicators (40+ features)  → Ensemble Signals → Streamlit Dashboard
+Etherscan On-Chain → Whale Flow Analysis              ↗
 ```
 
 ## 🚀 Quick Start
@@ -19,26 +19,44 @@ Etherscan On-Chain → Whale Flow Analysis       ↗
 ### Prerequisites
 - Docker Desktop installed
 - 8GB+ RAM (16GB recommended for Mistral 7B)
-- GPU optional but recommended for Ollama
+- GPU optional but recommended (CUDA 12 supported)
+- Python 3.10+ (if running without Docker)
 
 ### 1. Clone & Configure
 ```bash
-git clone <repo>
-cd crypto-sentinel
+git clone https://github.com/AaravMehta-07/CryptoNerve
+cd CryptoNerve
 cp .env.example .env
 # Edit .env with your API keys (Reddit, NewsAPI, Etherscan)
 ```
 
-### 2. Start Everything
+### 2. Download the GGUF Model
+The GGUF model (~3.5 GB) is **not included** in this repo (excluded via `.gitignore`).  
+Place it at `models/mistral-7b-instruct-v0.1.Q3_K_M.gguf` or set the `LLM_MODEL_PATH` env variable.
+
+You can download it from [TheBloke on HuggingFace](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF).
+
+### 3. Start Everything
 ```bash
 docker compose up -d
-# First run pulls Mistral 7B (~4GB) — wait 10-15 minutes
 ```
 
-### 3. Open Dashboard
+### 4. Open Dashboard
 ```
 http://localhost:8501
 ```
+
+### Running Without Docker
+```bash
+pip install -r requirements.txt
+python -m pipeline  # or python orchestrator.py
+streamlit run dashboard/app.py
+```
+
+> **Note:** `llama-cpp-python` requires a C++ compiler. For GPU support:  
+> `CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python==0.2.90`
+
+---
 
 ## 🔑 API Keys Required
 
@@ -48,44 +66,78 @@ http://localhost:8501
 | [NewsAPI](https://newsapi.org) | 100 req/day | News sentiment |
 | [Etherscan](https://etherscan.io/apis) | 5 req/sec | Whale tracking |
 
+All keys are optional — the system degrades gracefully with warnings if any are missing.
+
+---
+
 ## 📊 Dashboard Pages
 
 | Page | Description |
 |------|-------------|
 | 📊 Live Dashboard | Multi-coin price cards, Fear & Greed, real-time signals |
 | 📈 Price & Technicals | OHLCV + RSI + MACD + Bollinger Bands |
-| 💬 Sentiment Analysis | Sentiment timeline, FUD/bullish composition, narratives |
+| 💬 Sentiment Analysis | Sentiment timeline, FUD/bullish composition, narrative detection |
 | 🐋 On-Chain Intelligence | Whale flows, exchange inflow/outflow, accumulation detection |
 | 🤖 AI Predictions | Ensemble prediction history with accuracy tracking |
 | ⚡ Signals & Alerts | Full signal breakdown with component scores |
-| ⏳ Backtesting | Strategy backtest with equity curve, Sharpe, drawdown |
+| ⏳ Backtesting | Strategy backtest with equity curve, Sharpe ratio, drawdown |
 | 📝 AI Reports | LLM-generated market reports (Mistral 7B) |
 | 🔍 Explainability | SHAP waterfall + feature importance visualization |
 | 📊 Model Performance | Accuracy tracking across models, coins, horizons |
 
-## ⚙️ Pipeline
+---
 
-The pipeline runs automatically on a schedule:
-- Every **1 min**: Price data (Binance)
-- Every **2 min**: On-chain whale data (Etherscan)
-- Every **5 min**: Reddit posts (PRAW)
-- Every **10 min**: News articles (NewsAPI / CryptoCompare)
-- Every **3 min**: Sentiment analysis (Mistral 7B)
-- Every **5 min**: Signal generation
-- Every **1 hour**: Model retraining
+## ⚙️ Pipeline Schedule
 
-## 🔬 ML Models
+| Interval | Task |
+|----------|------|
+| 1 min | Price data (Binance) |
+| 2 min | On-chain whale data (Etherscan) |
+| 5 min | Reddit posts (PRAW) + Signal generation |
+| 10 min | News articles (NewsAPI / CryptoCompare) + Sentiment analysis |
+| 6 hours | Model retraining |
 
-| Model | Role | Features |
-|-------|------|----------|
-| XGBoost | Primary classifier (45%) | 40+ features incl. sentiment + technical + on-chain |
-| Prophet | Time-series trend (30%) | Price seasonality, trend, holiday effects |
-| LSTM | Sequential patterns (25%) | 48-step sliding window across all features |
+---
+
+## 🔬 ML Models & Stack
+
+| Model | Weight | Role |
+|-------|--------|------|
+| XGBoost | 45% | Primary classifier with 40+ features incl. sentiment + technical + on-chain |
+| Prophet | 30% | Time-series trend, seasonality, holiday effects |
+| LSTM | 25% | Sequential patterns via 48-step sliding window |
+
+**Additional ML:** LightGBM, AutoGluon (tabular), Optuna hyperparameter optimization, SHAP explainability.
+
+**NLP:** Mistral 7B (GGUF, CPU/GPU via llama-cpp-python) + FinBERT for financial sentiment.
+
+---
+
+## 📦 Key Dependencies
+
+```
+# ML
+xgboost, lightgbm, tensorflow, scikit-learn, autogluon, optuna, shap
+
+# NLP / LLM
+transformers, torch, llama-cpp-python (GGUF)
+
+# Data / On-chain
+praw, newsapi-python, web3, aiohttp
+
+# Dashboard
+streamlit, plotly, wordcloud
+
+# DB
+psycopg2, sqlalchemy (PostgreSQL with connection pooling)
+```
+
+---
 
 ## ⚠️ Disclaimer
 
-**This is for educational purposes only. Not financial advice.**
+**This is for educational purposes only. Not financial advice.**  
 Crypto markets are highly volatile. Never invest more than you can afford to lose.
 
 ---
-*Crypto Sentinel v1.0 — Built with ❤️ using Python, Streamlit, PostgreSQL, and Ollama*
+*Crypto Sentinel v1.1 — Built with ❤️ using Python, Streamlit, PostgreSQL, and llama-cpp-python*
