@@ -70,20 +70,33 @@ class OllamaAnalyzer:
             logger.warning("LocalLLM not available — FinBERT fallback will be used")
 
     def _build_prompt(self, text: str, coin: str) -> str:
-        # Mistral-Instruct chat format: [INST] … [/INST]
+        # Key fix: no 'or' literals inside the JSON template — they anchor
+        # Mistral to a fixed default confidence. Show 5 examples with
+        # deliberately varied confidence so the model calibrates properly.
         return (
-            f"[INST] You are a crypto market sentiment analyst. "
-            f"Analyze the following text about {coin} and classify the sentiment.\n\n"
+            f"[INST] You are a crypto market sentiment analyst specialising in {coin}.\n\n"
+            f'Analyze the following text and return sentiment as JSON.\n'
+            f'Do NOT default to 0.9 confidence — calibrate based on signal clarity.\n\n'
             f'TEXT: "{text[:900]}"\n\n'
-            f"Respond in EXACTLY this JSON format, nothing else:\n"
-            f'{{"label": "BULLISH" or "BEARISH" or "NEUTRAL" or "FUD", '
-            f'"score": <float 0.0-1.0 where 0=extremely bearish, 0.5=neutral, 1.0=extremely bullish>, '
-            f'"confidence": <float 0.0-1.0>, '
-            f'"reasoning": "<one sentence>"}}\n\n'
-            f"Examples:\n"
-            f'- "Bitcoin ETF approved!" → {{"label":"BULLISH","score":0.92,"confidence":0.95,"reasoning":"ETF approval is a major bullish catalyst"}}\n'
-            f'- "SEC sues exchange" → {{"label":"BEARISH","score":0.15,"confidence":0.88,"reasoning":"Regulatory action creates selling pressure"}}\n\n'
-            f"Respond with JSON only: [/INST]"
+            f"Output ONLY this JSON object, nothing else:\n"
+            f'{{"label":"BULLISH|BEARISH|NEUTRAL|FUD",'
+            f'"score":0.0_to_1.0,'
+            f'"confidence":0.0_to_1.0,'
+            f'"reasoning":"one sentence"}}\n\n'
+            f"score: 0.0=very bearish, 0.5=neutral, 1.0=very bullish\n"
+            f"confidence: how clear and unambiguous is the signal (varies per article)\n\n"
+            f"Calibration examples:\n"
+            f'>> "Bitcoin ETF gets SEC approval, record $4B inflows on day one"\n'
+            f'   {{"label":"BULLISH","score":0.94,"confidence":0.91,"reasoning":"ETF approval unlocks institutional capital directly."}}\n'
+            f'>> "Major exchange hacked, $200M drained, withdrawals suspended"\n'
+            f'   {{"label":"FUD","score":0.07,"confidence":0.96,"reasoning":"Hack triggers immediate panic selling and loss of trust."}}\n'
+            f'>> "Fed holds rates; crypto sees mixed signals with low volume"\n'
+            f'   {{"label":"NEUTRAL","score":0.50,"confidence":0.55,"reasoning":"Mixed macro data gives no clear directional signal."}}\n'
+            f'>> "Regulators debate new crypto bill, outcome highly uncertain"\n'
+            f'   {{"label":"BEARISH","score":0.30,"confidence":0.63,"reasoning":"Regulatory uncertainty pressures prices, but unclear outcome."}}\n'
+            f'>> "Bitcoin hashrate hits all-time high as miners expand capacity"\n'
+            f'   {{"label":"BULLISH","score":0.65,"confidence":0.72,"reasoning":"Rising hashrate signals miner confidence in long-term value."}}\n\n'
+            f"Now analyze the TEXT and output JSON only: [/INST]"
         )
 
     def analyze_sentiment(self, text: str, coin: str = "BTC"):
