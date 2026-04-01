@@ -5,8 +5,18 @@ Drop-in replacement for the Ollama-based analyzer — same interface.
 import json
 import re
 import os
+import time
+import psutil
 from loguru import logger
 from config.settings import settings
+
+# ── Hardware throttle constants ────────────────────────────────────────────
+# Sleep between LLM calls so the CPU gets a breath between inferences
+LLM_INTER_CALL_SLEEP = 1.0   # seconds
+# Pause and wait if CPU is above this during a batch
+LLM_CPU_PAUSE_THRESHOLD = 88  # %
+LLM_CPU_PAUSE_SLEEP     = 3   # seconds to sleep when CPU is too hot
+LLM_CPU_PAUSE_MAX_WAIT  = 30  # give up waiting after this many seconds
 
 # Lazy-loaded singleton so the model is only loaded once per process
 _llm_instance = None
@@ -116,12 +126,30 @@ class OllamaAnalyzer:
 
     def batch_analyze(self, texts_with_coins):
         results = []
-        for item in texts_with_coins:
+        for i, item in enumerate(texts_with_coins):
+            # ── CPU gate: pause if system is running hot ───────────────────
+            waited = 0
+            while waited < LLM_CPU_PAUSE_MAX_WAIT:
+                cpu = psutil.cpu_percent(interval=0.5)
+                if cpu < LLM_CPU_PAUSE_THRESHOLD:
+                    break
+                logger.debug(
+                    f"[throttle] LLM batch paused (item {i+1}/{len(texts_with_coins)}) "
+                    f"— CPU {cpu:.0f}% > {LLM_CPU_PAUSE_THRESHOLD}%"
+                )
+                time.sleep(LLM_CPU_PAUSE_SLEEP)
+                waited += LLM_CPU_PAUSE_SLEEP
+
             result = self.analyze_sentiment(item["text"], item.get("coin", "BTC"))
             if result:
-                result["source_id"] = item["source_id"]
+                result["source_id"]   = item["source_id"]
                 result["source_type"] = item["source_type"]
-                result["coin"] = item["coin"]
+                result["coin"]        = item["coin"]
                 result["text_content"] = item["text"][:500]
                 results.append(result)
+
+            # ── Breathing room between inferences ─────────────────────────
+            if i < len(texts_with_coins) - 1:
+                time.sleep(LLM_INTER_CALL_SLEEP)
+
         return results
