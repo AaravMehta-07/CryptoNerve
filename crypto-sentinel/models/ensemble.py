@@ -89,15 +89,21 @@ class EnsemblePredictor:
                         preds.append(pred["probabilities"]["UP"] if pred else 0.5)
                     model_probas[name] = np.array(preds)
                 elif name == "lstm":
-                    # For LSTM we need a sequence of rows up to each point
+                    # HIGH-05 FIX: Start from seq_len index so the LSTM always has
+                    # a full context window. Earlier rows returned None (→ 0.5 fallback)
+                    # which biased the weight optimization against LSTM.
                     preds = []
                     seq_len = model.sequence_length
                     full_df = val_df[feature_columns]
-                    for i in range(len(val_df)):
-                        start = max(0, i - seq_len)
-                        window = full_df.iloc[start:i+1]
+                    for i in range(seq_len, len(val_df)):
+                        window = full_df.iloc[i - seq_len: i + 1]
                         pred = model.predict(window)
                         preds.append(pred["probabilities"]["UP"] if pred else 0.5)
+                    # Pad the front with the first real prediction to keep array length
+                    if preds:
+                        preds = [preds[0]] * seq_len + preds
+                    else:
+                        preds = [0.5] * len(val_df)
                     model_probas[name] = np.array(preds)
                 else:
                     avail = [c for c in feature_columns if c in val_df.columns]

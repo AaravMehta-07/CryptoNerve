@@ -33,14 +33,24 @@ class SHAPExplainer:
             explainer = shap.TreeExplainer(xgb_model.model)
             shap_values = explainer.shap_values(X.tail(1))
 
-            feature_impact = dict(zip(available_cols, shap_values[0]))
+            # MED-10 FIX: For binary XGBoost classifiers, expected_value can be
+            # an array of shape (2,). Take index [1] (positive class) when it's an array.
+            expected_value = explainer.expected_value
+            if hasattr(expected_value, "__len__"):
+                expected_value = float(expected_value[1])
+            else:
+                expected_value = float(expected_value)
+
+            shap_values_1d = shap_values[0] if isinstance(shap_values, list) else shap_values[0]
+
+            feature_impact = dict(zip(available_cols, shap_values_1d))
             sorted_impact = sorted(feature_impact.items(), key=lambda x: abs(x[1]), reverse=True)
 
             # Waterfall plot
             shap.waterfall_plot(
                 shap.Explanation(
-                    values=shap_values[0],
-                    base_values=explainer.expected_value,
+                    values=shap_values_1d,
+                    base_values=expected_value,
                     data=X.tail(1).values[0],
                     feature_names=available_cols,
                 ),
@@ -53,9 +63,11 @@ class SHAPExplainer:
             buf.seek(0)
             waterfall_b64 = base64.b64encode(buf.getvalue()).decode()
 
-            # Summary plot
+            # Summary plot (use index [1] for positive class if shap_values is a list)
+            shap_vals_full = explainer.shap_values(X.tail(50))
+            shap_for_summary = shap_vals_full[1] if isinstance(shap_vals_full, list) else shap_vals_full
             shap.summary_plot(
-                explainer.shap_values(X.tail(50)), X.tail(50),
+                shap_for_summary, X.tail(50),
                 feature_names=available_cols, show=False, max_display=15,
             )
             plt.tight_layout()
@@ -70,8 +82,8 @@ class SHAPExplainer:
                 "top_features": sorted_impact[:10],
                 "waterfall_plot_b64": waterfall_b64,
                 "summary_plot_b64": summary_b64,
-                "base_value": float(explainer.expected_value),
-                "prediction_value": float(shap_values[0].sum() + explainer.expected_value),
+                "base_value": expected_value,
+                "prediction_value": float(shap_values_1d.sum() + expected_value),
                 "explanation_text": self._generate_text_explanation(sorted_impact[:5], coin),
             }
         except Exception as e:

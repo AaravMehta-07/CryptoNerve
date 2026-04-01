@@ -146,3 +146,12 @@ extracted_pdf.txt
 
 # Large models
 *.gguf
+
+# Trained ML model artifacts (copy trained_models/ folder between machines)
+trained_models/
+!trained_models/.gitkeep
+model_artifacts/
+
+# SQLite database
+data/*.db
+data/*.db-journal

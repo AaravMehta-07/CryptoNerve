@@ -6,7 +6,6 @@ requests==2.31.0
 aiohttp==3.9.3
 
 # Database
-psycopg2-binary==2.9.9
 sqlalchemy==2.0.25
 
 # ML & Data
@@ -19,6 +18,10 @@ tensorflow==2.15.0
 shap==0.44.1
 scipy==1.12.0
 
+# Time-series forecasting
+# MED-09 FIX: prophet was missing from requirements but imported by prophet_model.py
+prophet==1.1.5
+
 # AutoML
 autogluon.tabular==1.1.1  # installs LGBMClassifier, XGBClassifier, CatBoost etc.
 
@@ -28,6 +31,8 @@ optuna-integration[sklearn]==3.5.0
 
 # NLP
 transformers==4.37.2
+# NOTE: torch and tensorflow in the same env can cause CUDA memory contention.
+# On CPU-only machines this is fine; on GPU use one or the other.
 torch==2.1.2
 tokenizers==0.15.1
 
@@ -53,4 +58,3 @@ schedule==1.2.1
 loguru==0.7.2
 rich==13.7.0
 psutil==5.9.8
-

@@ -4,17 +4,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Required env-var validation — fail fast with clear messages (LOW-05)
-# ---------------------------------------------------------------------------
-_WARNINGS = []
-
-def _require(key, hint=""):
-    val = os.getenv(key)
-    if not val:
-        _WARNINGS.append(f"  ⚠  {key} is not set.{' ' + hint if hint else ''}")
-    return val
-
 
 class Settings:
     # Reddit
@@ -40,44 +29,14 @@ class Settings:
     def ETHERSCAN_API_KEY(self):
         return os.getenv("ETHERSCAN_API_KEY")
 
-    # Database — all @property so they're read from env on every access (CRIT-02)
-    @property
-    def DB_HOST(self):
-        return os.getenv("DB_HOST", "localhost")
-
-    @property
-    def DB_PORT(self):
-        return os.getenv("DB_PORT", "5432")
-
-    @property
-    def DB_NAME(self):
-        return os.getenv("DB_NAME", "crypto_sentinel")
-
-    @property
-    def DB_USER(self):
-        return os.getenv("DB_USER", "admin")
-
-    @property
-    def DB_PASSWORD(self):
-        return os.getenv("DB_PASSWORD", "")
-
-    @property
-    def USE_SQLITE(self):
-        return os.getenv("USE_SQLITE", "true").lower() in ("1", "true", "yes")
-
+    # Database — SQLite only
     @property
     def DATABASE_URL(self):
-        if self.USE_SQLITE:
-            import os as _os
-            db_path = _os.path.join(
-                _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-                "data", "crypto_sentinel.db"
-            )
-            return f"sqlite:///{db_path}"
-        return (
-            f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        db_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "crypto_sentinel.db"
         )
+        return f"sqlite:///{db_path}"
 
     # Local LLM (llama-cpp-python with GGUF)
     @property
@@ -110,32 +69,28 @@ class Settings:
     NEWS_FETCH_INTERVAL = 600      # 10 minutes
     PRICE_FETCH_INTERVAL = 60      # 1 minute
     ONCHAIN_FETCH_INTERVAL = 120   # 2 minutes
-    SENTIMENT_PROCESS_INTERVAL = 600   # 10 minutes (was 3 min — too fast for LLM batches, MED-03)
-    MODEL_RETRAIN_INTERVAL = 21600     # 6 hours (was 1 hr — too aggressive, MED-05)
+    SENTIMENT_PROCESS_INTERVAL = 600   # 10 minutes
+    MODEL_RETRAIN_INTERVAL = 21600     # 6 hours
     SIGNAL_GENERATION_INTERVAL = 300   # 5 minutes
 
     # Model
     @property
     def MODEL_ARTIFACTS_DIR(self):
-        return os.getenv("MODEL_ARTIFACTS_DIR", "./model_artifacts")
+        # Portable model directory — copy this folder to transfer trained models
+        default = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "trained_models",
+        )
+        return os.getenv("MODEL_ARTIFACTS_DIR", default)
 
     HISTORICAL_DAYS = 90
-    PREDICTION_HORIZONS = [1, 4, 24]  # hours
+    PREDICTION_HORIZONS = [1, 4, 24]  # hours — models trained for each
 
     # Binance
     BINANCE_BASE_URL = "https://api.binance.com"
 
-    # Connection pool — SQLite uses NullPool (no pooling needed)
-    @property
-    def DB_POOL_SIZE(self):
-        return 5 if not self.USE_SQLITE else 1
-
-    @property
-    def DB_MAX_OVERFLOW(self):
-        return 10 if not self.USE_SQLITE else 0
-
     def validate(self):
-        """Warn about missing optional keys; error on truly required ones."""
+        """Warn about missing optional keys."""
         warnings = []
         if not self.REDDIT_CLIENT_ID or not self.REDDIT_CLIENT_SECRET:
             warnings.append(
@@ -148,10 +103,6 @@ class Settings:
         if not self.ETHERSCAN_API_KEY:
             warnings.append(
                 "  ⚠  ETHERSCAN_API_KEY not set — on-chain data collection disabled."
-            )
-        if not os.getenv("DB_PASSWORD"):
-            warnings.append(
-                "  ⚠  DB_PASSWORD not set — using empty password (insecure for production)."
             )
         if warnings:
             print("=" * 60, file=sys.stderr)

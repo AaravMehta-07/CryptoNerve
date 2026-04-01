@@ -21,6 +21,7 @@ LLM routing:
 """
 
 import hashlib
+import json
 import re
 import time
 import requests
@@ -162,7 +163,7 @@ class NewsCollector:
                     "content":      description[:5000],
                     "url":          link,
                     "published_at": self._parse_rss_date(pub_date),
-                    "coin_mentions": coin_mentions,
+                    "coin_mentions": json.dumps(coin_mentions),
                 })
 
         except Exception as e:
@@ -216,7 +217,7 @@ class NewsCollector:
                     "published_at": datetime.fromisoformat(
                         article["publishedAt"].replace("Z", "+00:00")
                     ),
-                    "coin_mentions": coin_mentions,
+                    "coin_mentions": json.dumps(coin_mentions),
                 })
             logger.info(f"NewsAPI: {len(articles)} crypto-relevant articles")
         except Exception as e:
@@ -244,7 +245,7 @@ class NewsCollector:
                     "content":      body[:5000],
                     "url":          article["url"],
                     "published_at": datetime.fromtimestamp(article["published_on"], tz=timezone.utc),
-                    "coin_mentions": self._detect_coins(f"{title} {body}"),
+                    "coin_mentions": json.dumps(self._detect_coins(f"{title} {body}")),
                 })
             logger.info(f"CryptoCompare: {len(articles)} articles")
         except Exception as e:

@@ -4,14 +4,16 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently --names \"UI,API\" --prefix-colors \"cyan,yellow\" \"vite\" \"cd ../crypto-sentinel && set PYTHONIOENCODING=utf-8 && python -m uvicorn api.main:app --reload --reload-dir api --port 8000 --host 0.0.0.0\"",
+    "dev:ui": "vite",
+    "dev:api": "cd ../crypto-sentinel && python -m uvicorn api.main:app --reload --reload-dir api --port 8000 --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.0",
+    "react-router-dom": "^6.21.3",
     "recharts": "^2.10.3",
     "lightweight-charts": "^4.1.3",
     "framer-motion": "^10.18.0",
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "concurrently": "^8.2.2"
   }
 }

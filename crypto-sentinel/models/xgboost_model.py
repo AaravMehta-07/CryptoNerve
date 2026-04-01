@@ -1,6 +1,3 @@
-"""
-XGBoost GPU model with Optuna hyperparameter optimization for 1h crypto prediction.
-"""
 import xgboost as xgb
 import numpy as np
 import pandas as pd
@@ -18,6 +15,22 @@ try:
 except ImportError:
     OPTUNA_AVAILABLE = False
     logger.warning("Optuna not installed — using default hyperparameters")
+
+
+def _get_xgb_device():
+    """
+    Detect GPU availability for XGBoost.
+    Set XGB_DEVICE=cuda in env to force GPU training.
+    Defaults to CPU (safe on all machines).
+    """
+    import os
+    device = os.getenv("XGB_DEVICE", "cpu")
+    if device == "cuda":
+        return "hist", {"device": "cuda"}
+    return "hist", {"device": "cpu"}
+
+
+_TREE_METHOD, _DEVICE_KWARGS = _get_xgb_device()
 
 
 class XGBoostModel:
@@ -57,15 +70,16 @@ class XGBoostModel:
 
             model = xgb.XGBClassifier(
                 **params,
-                tree_method="gpu_hist",
+                tree_method=_TREE_METHOD,
+                **_DEVICE_KWARGS,
                 eval_metric="logloss",
+                early_stopping_rounds=20,
                 use_label_encoder=False,
                 random_state=42,
             )
             model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
-                early_stopping_rounds=20,
                 verbose=False,
             )
             scores.append(accuracy_score(y_val, model.predict(X_val)))
@@ -105,15 +119,16 @@ class XGBoostModel:
 
             model = xgb.XGBClassifier(
                 **self.best_params,
-                tree_method="gpu_hist",
+                tree_method=_TREE_METHOD,
+                **_DEVICE_KWARGS,
                 eval_metric="logloss",
+                early_stopping_rounds=20,
                 use_label_encoder=False,
                 random_state=42,
             )
             model.fit(
                 X_train_cv, y_train_cv,
                 eval_set=[(X_val_cv, y_val_cv)],
-                early_stopping_rounds=20,
                 verbose=False,
             )
             scores.append(accuracy_score(y_val_cv, model.predict(X_val_cv)))
@@ -125,15 +140,16 @@ class XGBoostModel:
 
         self.model = xgb.XGBClassifier(
             **self.best_params,
-            tree_method="gpu_hist",
+            tree_method=_TREE_METHOD,
+            **_DEVICE_KWARGS,
             eval_metric="logloss",
+            early_stopping_rounds=20,
             use_label_encoder=False,
             random_state=42,
         )
         self.model.fit(
             X_train_final, y_train_final,
             eval_set=[(X_val_final, y_val_final)],
-            early_stopping_rounds=20,
             verbose=False,
         )
 

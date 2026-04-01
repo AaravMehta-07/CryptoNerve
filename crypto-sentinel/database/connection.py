@@ -1,8 +1,7 @@
 """
-Database engine — lazy singleton.
+Database engine — lazy singleton (SQLite only).
 
-Supports both PostgreSQL and SQLite (for local / hackathon use).
-SQLite uses StaticPool so threads share a single connection safely.
+Uses StaticPool so threads share a single connection safely.
 """
 import os
 from sqlalchemy import create_engine, text
@@ -19,25 +18,16 @@ def get_engine():
     global _engine
     if _engine is None:
         url = settings.DATABASE_URL
-        if url.startswith("sqlite"):
-            # Ensure data/ directory exists
-            db_path = url.replace("sqlite:///", "")
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
-            _engine = create_engine(
-                url,
-                connect_args={"check_same_thread": False},
-                poolclass=StaticPool,
-                echo=False,
-            )
-        else:
-            _engine = create_engine(
-                url,
-                pool_size=settings.DB_POOL_SIZE,
-                max_overflow=settings.DB_MAX_OVERFLOW,
-                pool_pre_ping=True,
-                echo=False,
-            )
-        logger.debug(f"SQLAlchemy engine initialised: {url[:40]}...")
+        # Ensure data/ directory exists
+        db_path = url.replace("sqlite:///", "")
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        _engine = create_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False,
+        )
+        logger.debug(f"SQLAlchemy engine initialised: {url[:60]}...")
     return _engine
 
 

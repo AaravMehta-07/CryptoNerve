@@ -22,19 +22,22 @@ export default function Sentiment() {
   const [sentData,   setSentData]   = useState([])
   const [narratives, setNarratives] = useState([])
   const [heatmap,    setHeatmap]    = useState([])
+  const [newsItems,  setNewsItems]  = useState([])
   const [loading,    setLoading]    = useState(true)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      const [s, n, h] = await Promise.all([
+      const [s, n, h, nws] = await Promise.all([
         api.sentiment(coin, 72),
         api.narratives(coin, 24),
         api.sentimentHeatmap(12),
+        api.news(72, 20, coin),
       ])
       setSentData(s)
       setNarratives(n)
       setHeatmap(h)
+      setNewsItems(nws)
       setLoading(false)
     }
     load()
@@ -151,6 +154,38 @@ export default function Sentiment() {
         {!narratives.length && <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No narratives available</span>}
       </div>
 
+      {/* Live news for this coin */}
+      <div className="section-title">📰 {coin} News Feed
+        <span style={{ fontSize: '0.68rem', fontWeight: 400, color: 'var(--text-muted)', marginLeft: 10 }}>LLM-scored · updated on Analyze</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 20 }}>
+        {newsItems.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '16px 0' }}>
+            No news yet. Run Analyze on the Dashboard to collect live articles for {coin}.
+          </div>
+        ) : newsItems.map((n, i) => {
+          const lbl = n.sentiment_label
+          const c = lbl === 'BULLISH' ? 'var(--green)' : lbl === 'BEARISH' || lbl === 'FUD' ? 'var(--red)' : 'var(--yellow)'
+          return (
+            <div key={i} style={{
+              background: 'var(--card)', border: '1px solid var(--border)',
+              borderLeft: `3px solid ${c || 'var(--border)'}`,
+              borderRadius: 8, padding: '8px 14px',
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              {lbl && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.62rem', color: c, flexShrink: 0 }}>{lbl}</span>}
+              <span style={{ fontSize: '0.78rem', color: 'var(--text)', flex: 1, lineHeight: 1.4 }}>
+                {n.url ? <a href={n.url} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>{n.title}</a> : n.title}
+              </span>
+              <span style={{ fontSize: '0.63rem', color: 'var(--text-muted)', flexShrink: 0 }}>{n.source}</span>
+              {n.sentiment_score != null && (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: c, flexShrink: 0 }}>{parseFloat(n.sentiment_score).toFixed(2)}</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
       {/* Heatmap */}
       <div className="section-title">🔥 Cross-Coin Sentiment Heatmap</div>
       <div className="chart-wrap">
@@ -159,3 +194,4 @@ export default function Sentiment() {
     </div>
   )
 }
+

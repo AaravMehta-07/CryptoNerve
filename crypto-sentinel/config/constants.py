@@ -19,13 +19,16 @@ STRONG_BUY = "STRONG_BUY"
 STRONG_SELL = "STRONG_SELL"
 
 # Fear & Greed Zones
+# HIGH-12 FIX: Use 101 as the upper bound for Extreme Greed so that index=100
+# (the maximum valid value) is correctly classified instead of falling through to "Neutral".
 FEAR_GREED_ZONES = {
     (0, 25): "Extreme Fear",
     (25, 45): "Fear",
     (45, 55): "Neutral",
     (55, 75): "Greed",
-    (75, 100): "Extreme Greed",
+    (75, 101): "Extreme Greed",  # 101 ensures index=100 is captured
 }
+
 
 # Crypto Narratives for Detection
 CRYPTO_NARRATIVES = [

@@ -90,13 +90,18 @@ class AccuracyTracker:
             return 0
 
     def get_model_accuracy(self, model_name=None, coin=None, horizon_hours=None):
+        # HIGH-07 FIX: Use parameterized queries instead of f-string SQL injection
         conditions = ["was_correct IS NOT NULL"]
+        params = {}
         if model_name:
-            conditions.append(f"model_name = '{model_name}'")
+            conditions.append("model_name = :model_name")
+            params["model_name"] = model_name
         if coin:
-            conditions.append(f"coin = '{coin}'")
+            conditions.append("coin = :coin")
+            params["coin"] = coin
         if horizon_hours:
-            conditions.append(f"horizon_hours = {horizon_hours}")
+            conditions.append("horizon_hours = :horizon_hours")
+            params["horizon_hours"] = horizon_hours
 
         query = f"""
         SELECT
@@ -111,7 +116,7 @@ class AccuracyTracker:
         ORDER BY accuracy DESC
         """
         try:
-            return pd.read_sql(query, self.engine)
+            return pd.read_sql(text(query), self.engine, params=params)
         except Exception as e:
             logger.error(f"Accuracy query error: {e}")
             return pd.DataFrame()

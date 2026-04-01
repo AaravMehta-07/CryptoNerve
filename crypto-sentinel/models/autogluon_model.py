@@ -49,6 +49,11 @@ class AutoGluonModel:
         train_data = train_df.iloc[:split_idx]
         val_data = train_df.iloc[split_idx:]
 
+        # Clear existing model directory to avoid "Learner is already fit" error
+        import shutil
+        if os.path.exists(self.model_dir):
+            shutil.rmtree(self.model_dir)
+
         self.predictor = TabularPredictor(
             label=target_column,
             path=self.model_dir,
@@ -62,7 +67,8 @@ class AutoGluonModel:
             tuning_data=val_data,
             time_limit=time_limit,
             presets="good_quality",
-            excluded_model_types=["KNN"],  # KNN is slow and useless for time-series
+            use_bag_holdout=True,
+            excluded_model_types=["KNN"],
         )
 
         # Evaluate

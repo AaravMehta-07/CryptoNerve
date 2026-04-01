@@ -87,9 +87,9 @@ class OnchainCollector:
                                     "value_native": value_eth,
                                     "token_symbol": "ETH",
                                     "block_number": int(tx["blockNumber"]),
-                                    "timestamp": datetime.fromtimestamp(
+                                    "block_time": datetime.fromtimestamp(
                                         int(tx["timeStamp"]), tz=timezone.utc
-                                    ),
+                                    ).strftime('%Y-%m-%d %H:%M:%S'),
                                     "tx_type": tx_type,
                                     "is_exchange_from": is_from_exchange,
                                     "is_exchange_to": is_to_exchange,
@@ -113,6 +113,8 @@ class OnchainCollector:
             return 3000.0
 
     def aggregate_onchain_metrics(self, coin, window_hours=4):
+        from database.sql_compat import time_ago
+        cutoff = time_ago(hours=window_hours)
         query = text("""
         SELECT
             COUNT(*) as whale_tx_count,
@@ -122,14 +124,14 @@ class OnchainCollector:
             COUNT(CASE WHEN value_usd > :threshold THEN 1 END) as large_tx_count
         FROM whale_transactions
         WHERE token_symbol = :coin
-        AND timestamp > NOW() - (:window_hours || ' hours')::INTERVAL
+        AND block_time > :cutoff
         """)
         try:
             with self.engine.connect() as conn:
                 df = pd.read_sql(query, conn, params={
                     "coin": coin,
                     "threshold": WHALE_ALERT_THRESHOLD_USD,
-                    "window_hours": str(window_hours),
+                    "cutoff": cutoff,
                 })
             if df.empty:
                 return None
@@ -164,10 +166,10 @@ class OnchainCollector:
         insert_sql = text("""
             INSERT INTO whale_transactions
                 (tx_hash, blockchain, from_address, to_address, value_usd, value_native,
-                 token_symbol, block_number, timestamp, tx_type, is_exchange_from, is_exchange_to)
+                 token_symbol, block_number, block_time, tx_type, is_exchange_from, is_exchange_to)
             VALUES
                 (:tx_hash, :blockchain, :from_address, :to_address, :value_usd, :value_native,
-                 :token_symbol, :block_number, :timestamp, :tx_type, :is_exchange_from, :is_exchange_to)
+                 :token_symbol, :block_number, :block_time, :tx_type, :is_exchange_from, :is_exchange_to)
             ON CONFLICT (tx_hash) DO NOTHING
         """)
         saved = 0
@@ -207,7 +209,7 @@ class OnchainCollector:
                     for window in [1, 4, 24]:
                         metrics = self.aggregate_onchain_metrics(coin, window)
                         if metrics:
-                            metrics["timestamp"] = datetime.now(timezone.utc)
+                            metrics["timestamp"] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                             try:
                                 conn.execute(insert_sql, metrics)
                             except Exception as e:

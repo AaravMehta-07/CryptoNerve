@@ -12,7 +12,7 @@ import pandas as pd
 
 def main():
     if not test_connection():
-        logger.error("Database not available. Start PostgreSQL first.")
+        logger.error("Database not available. Check data/ directory permissions.")
         sys.exit(1)
 
     collector = PriceCollector()

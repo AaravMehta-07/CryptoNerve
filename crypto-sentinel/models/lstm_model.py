@@ -72,7 +72,9 @@ class LSTMModel:
         return normalized
 
     def _apply_normalize(self, df, feature_columns):
-        """Apply training-time scaler params — no re-fitting (prevents leakage)."""
+        """Apply training-time scaler params — no re-fitting (prevents leakage).
+        MED-05 FIX: Clip normalized values to [0, 1] so out-of-training-range
+        feature values at inference time don't destabilize the LSTM."""
         if not self.scaler_params:
             logger.warning("LSTM: scaler_params missing — predictions may be inaccurate")
             return df
@@ -81,7 +83,7 @@ class LSTMModel:
             if col in normalized.columns and col in self.scaler_params:
                 p = self.scaler_params[col]
                 range_val = p["max"] - p["min"] if p["max"] != p["min"] else 1.0
-                normalized[col] = (normalized[col] - p["min"]) / range_val
+                normalized[col] = ((normalized[col] - p["min"]) / range_val).clip(0.0, 1.0)
         return normalized
 
     def _build_model(self, n_features, units1=64, units2=32, dropout=0.2, lr=0.001):

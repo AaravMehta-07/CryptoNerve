@@ -1,8 +1,16 @@
+"""
+backtesting/paper_trader.py — Virtual paper trading simulator.
+
+CRIT-05 FIX: Replaced NOW() (PostgreSQL-only) with datetime('now') (SQLite).
+CRIT-06 FIX: All f-string SQL injections replaced with parameterized queries.
+MED (paper_trades): Table added to init_db.py (LOW-04).
+"""
 import pandas as pd
 from datetime import datetime, timezone
 from loguru import logger
 from database.connection import get_engine
 from config.constants import INITIAL_CAPITAL, POSITION_SIZE_PCT
+from sqlalchemy import text
 
 
 class PaperTrader:
@@ -25,12 +33,13 @@ class PaperTrader:
         open_pos = self.get_open_positions()
         total_value = self.capital
         for _, pos in open_pos.iterrows():
-            current_query = f"""
-            SELECT close FROM price_data WHERE coin = '{pos["coin"]}'
-            ORDER BY timestamp DESC LIMIT 1
-            """
+            # CRIT-06 FIX: use parameterized query, not f-string
             try:
-                price_df = pd.read_sql(current_query, self.engine)
+                price_df = pd.read_sql(
+                    "SELECT close FROM price_data WHERE coin = :coin ORDER BY timestamp DESC LIMIT 1",
+                    self.engine,
+                    params={"coin": pos["coin"]},
+                )
                 if not price_df.empty:
                     current_price = price_df.iloc[0]["close"]
                     total_value += pos["quantity"] * current_price
@@ -45,7 +54,7 @@ class PaperTrader:
         trade = {
             "coin": coin, "action": "BUY", "quantity": quantity,
             "entry_price": price, "signal_id": signal_id, "confidence": confidence,
-            "status": "OPEN", "opened_at": datetime.now(timezone.utc),
+            "status": "OPEN", "opened_at": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         }
         try:
             pd.DataFrame([trade]).to_sql("paper_trades", self.engine, if_exists="append", index=False)
@@ -56,26 +65,30 @@ class PaperTrader:
 
     def close_position(self, trade_id, close_price):
         try:
+            # CRIT-06 FIX: use parameterized query
             open_pos = pd.read_sql(
-                f"SELECT * FROM paper_trades WHERE id = {trade_id} AND status = 'OPEN'",
-                self.engine
+                "SELECT * FROM paper_trades WHERE id = :tid AND status = 'OPEN'",
+                self.engine,
+                params={"tid": int(trade_id)},
             )
             if open_pos.empty:
                 return
 
             pos = open_pos.iloc[0]
-            pnl = (close_price - pos["entry_price"]) * pos["quantity"]
-            pnl_pct = (close_price - pos["entry_price"]) / pos["entry_price"] * 100
-            self.capital += pos["quantity"] * close_price
+            pnl = float((close_price - pos["entry_price"]) * pos["quantity"])
+            pnl_pct = float((close_price - pos["entry_price"]) / pos["entry_price"] * 100)
+            self.capital += float(pos["quantity"]) * close_price
+            closed_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-            from sqlalchemy import text
+            # CRIT-05 FIX: datetime('now') for SQLite; fully parameterized (no f-strings)
             with self.engine.connect() as conn:
-                conn.execute(text(f"""
+                conn.execute(text("""
                     UPDATE paper_trades SET
-                        exit_price = {close_price}, pnl = {pnl}, pnl_pct = {pnl_pct},
-                        status = 'CLOSED', closed_at = NOW()
-                    WHERE id = {trade_id}
-                """))
+                        exit_price = :ep, pnl = :pnl, pnl_pct = :ppc,
+                        status = 'CLOSED', closed_at = :ca
+                    WHERE id = :tid
+                """), {"ep": float(close_price), "pnl": pnl, "ppc": pnl_pct,
+                       "ca": closed_at, "tid": int(trade_id)})
                 conn.commit()
 
             logger.info(f"Paper trade closed: id={trade_id}, PnL={pnl_pct:.2f}%")
@@ -84,15 +97,16 @@ class PaperTrader:
 
     def get_performance_summary(self):
         try:
+            # CRIT-05 FIX: removed ::numeric PostgreSQL cast; SQLite ROUND() is compatible
             return pd.read_sql("""
                 SELECT
                     COUNT(*) as total_trades,
                     SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
                     SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) as losses,
-                    ROUND(AVG(pnl_pct)::numeric, 2) as avg_pnl_pct,
-                    ROUND(SUM(pnl)::numeric, 2) as total_pnl,
-                    ROUND(MAX(pnl_pct)::numeric, 2) as best_trade_pct,
-                    ROUND(MIN(pnl_pct)::numeric, 2) as worst_trade_pct
+                    ROUND(AVG(pnl_pct), 2) as avg_pnl_pct,
+                    ROUND(SUM(pnl), 2) as total_pnl,
+                    ROUND(MAX(pnl_pct), 2) as best_trade_pct,
+                    ROUND(MIN(pnl_pct), 2) as worst_trade_pct
                 FROM paper_trades WHERE status = 'CLOSED'
             """, self.engine)
         except Exception:

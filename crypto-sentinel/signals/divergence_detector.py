@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from loguru import logger
 from database.connection import get_engine
+from database.sql_compat import time_ago
 from sqlalchemy import text
 
 
@@ -14,21 +15,25 @@ class DivergenceDetector:
         HIGH-05 FIX: Align price and sentiment series on a common timestamp axis
         before computing slopes. Previously they used independent x-axes of
         different lengths, making slope comparison meaningless.
+
+        CRIT-04 FIX: Replaced PostgreSQL NOW()/::INTERVAL with SQLite-compatible
+        time_ago() bind parameter approach.
         """
+        cutoff = time_ago(hours=window_hours)
         price_query = text("""
         SELECT close, timestamp FROM price_data
         WHERE coin = :coin AND interval = '1h'
-        AND timestamp > NOW() - (:hours || ' hours')::INTERVAL
+        AND timestamp > :cutoff
         ORDER BY timestamp ASC
         """)
         sentiment_query = text("""
         SELECT avg_sentiment, window_start as timestamp FROM sentiment_aggregated
         WHERE coin = :coin AND window_size = '1h'
-        AND window_start > NOW() - (:hours || ' hours')::INTERVAL
+        AND window_start > :cutoff
         ORDER BY window_start ASC
         """)
         try:
-            params = {"coin": coin, "hours": str(window_hours)}
+            params = {"coin": coin, "cutoff": cutoff}
             with self.engine.connect() as conn:
                 price_df = pd.read_sql(price_query, conn, params=params)
                 sent_df = pd.read_sql(sentiment_query, conn, params=params)
@@ -37,8 +42,8 @@ class DivergenceDetector:
                 return {"divergence_type": "NONE", "strength": 0, "description": "Insufficient data"}
 
             # HIGH-05 FIX: merge on timestamp so both series share the same x-axis
-            price_df["timestamp"] = pd.to_datetime(price_df["timestamp"]).dt.floor("H")
-            sent_df["timestamp"] = pd.to_datetime(sent_df["timestamp"]).dt.floor("H")
+            price_df["timestamp"] = pd.to_datetime(price_df["timestamp"]).dt.floor("h")
+            sent_df["timestamp"] = pd.to_datetime(sent_df["timestamp"]).dt.floor("h")
             merged = pd.merge(price_df, sent_df, on="timestamp", how="inner")
 
             if len(merged) < 6:

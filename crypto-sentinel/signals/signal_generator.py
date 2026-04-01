@@ -32,7 +32,7 @@ class SignalGenerator:
         # Sentiment — parameterized query (MED-02)
         sent_df = pd.read_sql(
             """SELECT avg_sentiment, social_volume, sentiment_velocity FROM sentiment_aggregated
-            WHERE coin = %(coin)s AND window_size = '4h' ORDER BY window_start DESC LIMIT 1""",
+            WHERE coin = :coin AND window_size = '4h' ORDER BY window_start DESC LIMIT 1""",
             self.engine, params={"coin": coin},
         )
         sentiment_score = float(sent_df.iloc[0]["avg_sentiment"]) if not sent_df.empty else 0.5
@@ -40,7 +40,7 @@ class SignalGenerator:
         # On-chain
         onchain_df = pd.read_sql(
             """SELECT net_flow_usd, whale_activity_score FROM onchain_metrics
-            WHERE coin = %(coin)s ORDER BY timestamp DESC LIMIT 1""",
+            WHERE coin = :coin ORDER BY timestamp DESC LIMIT 1""",
             self.engine, params={"coin": coin},
         )
         whale_accumulating = False
@@ -53,7 +53,7 @@ class SignalGenerator:
         # Technical
         tech_df = pd.read_sql(
             """SELECT rsi, macd_histogram FROM technical_indicators
-            WHERE coin = %(coin)s ORDER BY timestamp DESC LIMIT 1""",
+            WHERE coin = :coin ORDER BY timestamp DESC LIMIT 1""",
             self.engine, params={"coin": coin},
         )
         technical_score = 0.5
@@ -96,8 +96,8 @@ class SignalGenerator:
         reasoning_parts.extend([
             f"Composite score: {composite:.2f}",
             f"Sentiment: {sentiment_score:.2f} ({'Bullish' if sentiment_score > 0.6 else 'Bearish' if sentiment_score < 0.4 else 'Neutral'})",
-            f"Prediction: {prediction['direction']} ({prediction['confidence']:.0%}, {prediction['models_used']} models)",
-            f"Model Agreement: {'✅' if prediction['model_agreement'] else '⚠️'}",
+            f"Prediction: {prediction['direction']} ({prediction['confidence']:.0%}, {prediction.get('models_used', '?')} models)",
+            f"Model Agreement: {'✅' if prediction.get('majority_agreement') else '⚠️'}",
             f"Whales: {'Accumulating 🟢' if whale_accumulating else 'Distributing 🔴'}",
         ])
 
@@ -117,9 +117,10 @@ class SignalGenerator:
                 reasoning_parts.append("Signal downgraded due to bearish divergence")
 
         # Current price
-        price_df = pd.read_sql(f"""
-            SELECT close FROM price_data WHERE coin = '{coin}' ORDER BY timestamp DESC LIMIT 1
-        """, self.engine)
+        price_df = pd.read_sql(
+            "SELECT close FROM price_data WHERE coin = :coin ORDER BY timestamp DESC LIMIT 1",
+            self.engine, params={"coin": coin},
+        )
         current_price = float(price_df.iloc[0]["close"]) if not price_df.empty else 0
 
         signal = {

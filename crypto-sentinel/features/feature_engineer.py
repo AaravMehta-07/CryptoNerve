@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from loguru import logger
 from database.connection import get_engine
+from database.sql_compat import time_ago
 from features.technical_indicators import TechnicalIndicators
 
 
@@ -14,22 +15,33 @@ class FeatureEngineer:
     # Core builder
     # ------------------------------------------------------------------
     def build_training_features(self, coin, interval="1h", days=90):
-        """Build complete 25+ feature set for 1h direction prediction."""
+        """Build complete 50+ feature set for multi-horizon direction prediction.
 
-        # 1. Price / OHLCV data (parameterized, MED-02)
+        Creates targets:
+          - target_1h:  next 1-candle direction
+          - target_4h:  next 4-candle direction
+          - target_24h: next 24-candle direction
+
+        MED-02 FIX: All SQL queries now use SQLite-compatible :param syntax
+        and time_ago() helper instead of PostgreSQL %(p)s / NOW() - INTERVAL.
+        """
+        cutoff = time_ago(days=days)
+
+        # 1. Price / OHLCV data
         price_df = pd.read_sql(
-            """SELECT timestamp, open, high, low, close, volume, quote_volume, num_trades
+            """SELECT timestamp, open, high, low, close, volume
                FROM price_data
-               WHERE coin = %(coin)s AND interval = %(interval)s
-               AND timestamp > NOW() - (%(days)s || ' days')::INTERVAL
+               WHERE coin = :coin AND interval = :interval
+               AND timestamp > :cutoff
                ORDER BY timestamp ASC""",
             self.engine,
-            params={"coin": coin, "interval": interval, "days": str(days)},
+            params={"coin": coin, "interval": interval, "cutoff": cutoff},
         )
         if price_df.empty or len(price_df) < 50:
             logger.warning(f"Insufficient price data for {coin}: {len(price_df)} rows")
             return None
 
+        price_df["timestamp"] = pd.to_datetime(price_df["timestamp"])
         price_df.set_index("timestamp", inplace=True)
 
         # 2. Technical indicators (RSI, MACD, BB, ATR, OBV, EMA)
@@ -57,12 +69,19 @@ class FeatureEngineer:
         if coin != "BTC":
             price_df = self._add_btc_correlation(price_df, interval, days)
 
-        # 10. Target: next 1h candle direction (HIGH-01 FIX: drop NaN BEFORE fill)
-        price_df["target_1h"] = (price_df["close"].pct_change().shift(-1) > 0).astype(int)
-        price_df["target_1h_pct"] = price_df["close"].pct_change().shift(-1)
+        # 10. Targets: next N-candle direction (binary: 1=up, 0=down)
+        #     shift(-N) looks N candles into the future — no leakage
+        price_df["target_1h"] = (price_df["close"].pct_change(1).shift(-1) > 0).astype(int)
+        price_df["target_1h_pct"] = price_df["close"].pct_change(1).shift(-1)
 
-        # DROP NaN targets before any fill — prevents label corruption
-        price_df = price_df.dropna(subset=["target_1h", "target_1h_pct"])
+        price_df["target_4h"] = (price_df["close"].pct_change(4).shift(-4) > 0).astype(int)
+        price_df["target_4h_pct"] = price_df["close"].pct_change(4).shift(-4)
+
+        price_df["target_24h"] = (price_df["close"].pct_change(24).shift(-24) > 0).astype(int)
+        price_df["target_24h_pct"] = price_df["close"].pct_change(24).shift(-24)
+
+        # DROP NaN targets before any fill (last 24 rows will have NaN for target_24h)
+        price_df = price_df.dropna(subset=["target_1h", "target_4h", "target_24h"])
         price_df = price_df.ffill().fillna(0)
         price_df = price_df.replace([np.inf, -np.inf], 0)
 
@@ -168,20 +187,24 @@ class FeatureEngineer:
         return df
 
     def _merge_sentiment(self, price_df, coin, interval):
-        """Merge 1h sentiment aggregates as features."""
+        """Merge 1h sentiment aggregates as features.
+        MED-02 FIX: Use :coin SQLite param syntax.
+        """
         try:
             sent_df = pd.read_sql(
-                """SELECT window_start as timestamp, avg_sentiment, sentiment_std,
+                """SELECT window_start as timestamp, avg_sentiment,
                           bullish_count, bearish_count, neutral_count, fud_count,
                           total_posts, sentiment_velocity, social_volume
                    FROM sentiment_aggregated
-                   WHERE coin = %(coin)s AND window_size = '1h'
+                   WHERE coin = :coin AND window_size = '1h'
                    ORDER BY window_start ASC""",
                 self.engine, params={"coin": coin},
             )
             if not sent_df.empty:
+                sent_df["timestamp"] = pd.to_datetime(sent_df["timestamp"])
                 sent_df.set_index("timestamp", inplace=True)
-                sent_df = sent_df.resample(interval).ffill()
+                if hasattr(sent_df.index, 'freq') and sent_df.index.freq is None:
+                    sent_df = sent_df.resample(interval).ffill()
                 price_df = price_df.join(sent_df, how="left")
                 sent_cols = sent_df.columns.tolist()
                 price_df[sent_cols] = price_df[sent_cols].ffill()
@@ -190,20 +213,24 @@ class FeatureEngineer:
         return price_df
 
     def _merge_onchain(self, price_df, coin, interval):
-        """Merge 4h on-chain metrics as features."""
+        """Merge 4h on-chain metrics as features.
+        MED-02 FIX: Use :coin SQLite param syntax.
+        """
         try:
             onchain_df = pd.read_sql(
                 """SELECT timestamp, whale_tx_count, whale_volume_usd,
                           exchange_inflow_usd, exchange_outflow_usd,
                           net_flow_usd, whale_activity_score
                    FROM onchain_metrics
-                   WHERE coin = %(coin)s AND window_size = '4h'
+                   WHERE coin = :coin AND window_size = '4h'
                    ORDER BY timestamp ASC""",
                 self.engine, params={"coin": coin},
             )
             if not onchain_df.empty:
+                onchain_df["timestamp"] = pd.to_datetime(onchain_df["timestamp"])
                 onchain_df.set_index("timestamp", inplace=True)
-                onchain_df = onchain_df.resample(interval).ffill()
+                if hasattr(onchain_df.index, 'freq') and onchain_df.index.freq is None:
+                    onchain_df = onchain_df.resample(interval).ffill()
                 price_df = price_df.join(onchain_df, how="left", rsuffix="_oc")
                 oc_cols = onchain_df.columns.tolist()
                 price_df[oc_cols] = price_df[oc_cols].ffill()
@@ -212,18 +239,22 @@ class FeatureEngineer:
         return price_df
 
     def _add_btc_correlation(self, price_df, interval, days):
-        """Add BTC 6h rolling correlation and price momentum for altcoins."""
+        """Add BTC 6h rolling correlation and price momentum for altcoins.
+        MED-02 FIX: Use :param SQLite syntax and time_ago() helper.
+        """
         try:
+            cutoff = time_ago(days=days)
             btc_df = pd.read_sql(
                 """SELECT timestamp, close
                    FROM price_data
-                   WHERE coin = 'BTC' AND interval = %(interval)s
-                   AND timestamp > NOW() - (%(days)s || ' days')::INTERVAL
+                   WHERE coin = 'BTC' AND interval = :interval
+                   AND timestamp > :cutoff
                    ORDER BY timestamp ASC""",
                 self.engine,
-                params={"interval": interval, "days": str(days)},
+                params={"interval": interval, "cutoff": cutoff},
             )
             if not btc_df.empty:
+                btc_df["timestamp"] = pd.to_datetime(btc_df["timestamp"])
                 btc_df.set_index("timestamp", inplace=True)
                 btc_ret = btc_df["close"].pct_change().rename("btc_return")
                 btc_mom_6 = btc_df["close"].pct_change(6).rename("btc_mom_6h")
@@ -240,11 +271,12 @@ class FeatureEngineer:
 
     # ------------------------------------------------------------------
     # Feature column list (for model input)
+    # Note: quote_volume / num_trades removed — not in SQLite schema (HIGH-01 FIX)
     # ------------------------------------------------------------------
     def get_feature_columns(self):
         return [
-            # Base OHLCV
-            "open", "high", "low", "close", "volume", "quote_volume", "num_trades",
+            # Base OHLCV (no quote_volume/num_trades — not in price_data schema)
+            "open", "high", "low", "close", "volume",
             # Technical
             "rsi", "rsi_7",
             "macd", "macd_signal", "macd_histogram", "macd_hist_slope",
@@ -266,7 +298,7 @@ class FeatureEngineer:
             "mean_ret_6h", "mean_ret_12h", "mean_ret_24h",
             "skew_24h", "kurt_24h",
             # Sentiment
-            "avg_sentiment", "sentiment_std", "sentiment_velocity",
+            "avg_sentiment", "sentiment_velocity",
             "bullish_count", "bearish_count", "neutral_count", "fud_count",
             "total_posts", "social_volume",
             # On-chain
@@ -278,8 +310,43 @@ class FeatureEngineer:
         ]
 
     # ------------------------------------------------------------------
-    # Live prediction feature builder (last N candles from DB)
+    # Live prediction feature builder
     # ------------------------------------------------------------------
     def build_prediction_features(self, coin, interval="1h", lookback_hours=48):
-        """Build features for the most recent candles — used at prediction time."""
-        return self.build_training_features(coin, interval=interval, days=lookback_hours // 24 + 1)
+        """Build features for the most recent candles — used at prediction time.
+        Unlike build_training_features, this does NOT create/drop target columns
+        since we don't need them for inference."""
+        cutoff = time_ago(days=max(1, lookback_hours // 24 + 1))
+
+        price_df = pd.read_sql(
+            """SELECT timestamp, open, high, low, close, volume
+               FROM price_data
+               WHERE coin = :coin AND interval = :interval
+               AND timestamp > :cutoff
+               ORDER BY timestamp ASC""",
+            self.engine,
+            params={"coin": coin, "interval": interval, "cutoff": cutoff},
+        )
+        if price_df.empty or len(price_df) < 30:
+            logger.warning(f"Insufficient prediction data for {coin}: {len(price_df)} rows")
+            return None
+
+        price_df["timestamp"] = pd.to_datetime(price_df["timestamp"])
+        price_df.set_index("timestamp", inplace=True)
+
+        price_df = self.ti.calculate_all(price_df)
+        price_df = self._add_technical_extras(price_df)
+        price_df = self._add_temporal_features(price_df)
+        price_df = self._add_lag_features(price_df)
+        price_df = self._add_rolling_features(price_df)
+        price_df = self._merge_sentiment(price_df, coin, interval)
+        price_df = self._merge_onchain(price_df, coin, interval)
+        if coin != "BTC":
+            self._add_btc_correlation(price_df, interval, max(1, lookback_hours // 24 + 1))
+
+        # No targets needed — fill NaN and return
+        price_df = price_df.ffill().fillna(0)
+        price_df = price_df.replace([np.inf, -np.inf], 0)
+
+        logger.info(f"Built prediction features for {coin}: {price_df.shape}")
+        return price_df

@@ -2,7 +2,7 @@
 SQLAlchemy ORM models (optional — raw SQL is used for most operations).
 These models are available for future ORM-based extensions.
 """
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ARRAY
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
 from sqlalchemy.orm import declarative_base
 from datetime import datetime, timezone
 

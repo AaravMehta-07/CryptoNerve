@@ -10,14 +10,12 @@ class TestSettings(unittest.TestCase):
     def test_settings_import(self):
         from config.settings import settings
         self.assertIsNotNone(settings)
-        self.assertIsInstance(settings.DB_PORT, str)
-        self.assertEqual(settings.DB_NAME, os.getenv("DB_NAME", "crypto_sentinel"))
 
     def test_database_url(self):
         from config.settings import settings
         url = settings.DATABASE_URL
-        self.assertIn("postgresql://", url)
-        self.assertIn(settings.DB_NAME, url)
+        self.assertIn("sqlite:///", url)
+        self.assertIn("crypto_sentinel.db", url)
 
 
 class TestConstants(unittest.TestCase):

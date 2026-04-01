@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from loguru import logger
@@ -28,54 +29,38 @@ class SentimentEngine:
             self.primary_analyzer = None
 
     def get_unanalyzed_texts(self, limit=50):
-        query = """
-        (
-            SELECT
-                'reddit_post' as source_type,
-                post_id as source_id,
-                title || ' ' || COALESCE(selftext, '') as text,
-                coin_mentions,
-                created_utc
-            FROM reddit_posts
-            WHERE post_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'reddit_post')
-            ORDER BY created_utc DESC
-            LIMIT %s
-        )
-        UNION ALL
-        (
-            SELECT
-                'reddit_comment' as source_type,
-                comment_id as source_id,
-                body as text,
-                coin_mentions,
-                created_utc
-            FROM reddit_comments
-            WHERE comment_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'reddit_comment')
-            ORDER BY created_utc DESC
-            LIMIT %s
-        )
-        UNION ALL
-        (
-            SELECT
-                'news' as source_type,
-                article_id as source_id,
-                title || ' ' || COALESCE(description, '') as text,
-                coin_mentions,
-                published_at as created_utc
-            FROM news_articles
-            WHERE article_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'news')
-            ORDER BY published_at DESC
-            LIMIT %s
-        )
+        """Fetch unanalyzed texts from news_articles only (reddit disabled).
+
+        SQLite-compatible: uses :param bind syntax instead of %s.
         """
+        query = text("""
+        SELECT
+            'news' as source_type,
+            article_id as source_id,
+            title || ' ' || COALESCE(description, '') as text,
+            coin_mentions,
+            published_at as created_utc
+        FROM news_articles
+        WHERE article_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'news')
+        ORDER BY published_at DESC
+        LIMIT :lim
+        """)
         try:
-            df = pd.read_sql(query, self.engine, params=(limit, limit, limit))
+            df = pd.read_sql(query, self.engine, params={"lim": limit})
             texts = []
             for _, row in df.iterrows():
-                coins = row["coin_mentions"]
-                if isinstance(coins, str):
-                    coins = coins.strip("{}").split(",") if coins.strip("{}") else []
-                elif not isinstance(coins, list):
+                coins_raw = row["coin_mentions"]
+                # coin_mentions is stored as JSON string in SQLite
+                if isinstance(coins_raw, str):
+                    try:
+                        coins = json.loads(coins_raw)
+                    except (json.JSONDecodeError, ValueError):
+                        # Legacy format: comma-separated or bracket-wrapped
+                        coins = coins_raw.strip("{}[]").split(",") if coins_raw.strip("{}[]") else []
+                        coins = [c.strip().strip('"').strip("'") for c in coins if c.strip()]
+                elif isinstance(coins_raw, list):
+                    coins = coins_raw
+                else:
                     coins = []
 
                 if not coins:
@@ -87,7 +72,7 @@ class SentimentEngine:
                         texts.append({
                             "source_type": row["source_type"],
                             "source_id": row["source_id"],
-                            "text": row["text"][:2000],
+                            "text": str(row["text"])[:2000],
                             "coin": coin,
                         })
             return texts
@@ -170,7 +155,7 @@ class SentimentEngine:
             neutral_count = int(label_counts.get("NEUTRAL", 0))
             fud_count = int(label_counts.get("FUD", 0))
 
-            # HIGH-07 FIX: non-overlapping slices for velocity calculation
+            # Non-overlapping slices for velocity calculation
             if len(df) >= 6:
                 half = len(df) // 2
                 recent = df.head(half)["sentiment_score"].mean()
@@ -182,10 +167,13 @@ class SentimentEngine:
             all_texts = df["text_content"].tolist()
             narratives = self.narrative_detector.detect_narratives(all_texts)
 
+            # Serialize dominant_narratives as JSON string for SQLite (no ARRAY type)
+            dominant_narratives_json = json.dumps([n[0] for n in narratives[:5]])
+
             result = {
                 "coin": coin,
-                "window_start": datetime.now(timezone.utc) - timedelta(hours=window_hours),
-                "window_end": datetime.now(timezone.utc),
+                "window_start": (datetime.now(timezone.utc) - timedelta(hours=window_hours)).strftime('%Y-%m-%d %H:%M:%S'),
+                "window_end": datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                 "window_size": f"{window_hours}h",
                 "avg_sentiment": round(avg_sentiment, 4),
                 "median_sentiment": round(median_sentiment, 4),
@@ -197,11 +185,10 @@ class SentimentEngine:
                 "total_posts": len(df),
                 "sentiment_velocity": round(velocity, 4),
                 "sentiment_acceleration": 0.0,
-                "dominant_narratives": [n[0] for n in narratives[:5]],
+                "dominant_narratives": dominant_narratives_json,
                 "social_volume": len(df),
             }
 
-            # CRIT-06 FIX: use raw SQL so psycopg2 sends list as proper TEXT[]
             try:
                 insert_agg = text("""
                     INSERT INTO sentiment_aggregated
@@ -217,10 +204,7 @@ class SentimentEngine:
                     ON CONFLICT (coin, window_start, window_size) DO NOTHING
                 """)
                 with self.engine.begin() as conn:
-                    conn.execute(insert_agg, {
-                        **{k: v for k, v in result.items() if k != "dominant_narratives"},
-                        "dominant_narratives": result["dominant_narratives"],  # list → TEXT[]
-                    })
+                    conn.execute(insert_agg, result)
             except Exception as e:
                 logger.debug(f"Sentiment aggregated insert skipped: {e}")
 
