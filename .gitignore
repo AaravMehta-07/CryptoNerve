@@ -1,0 +1,56 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.Python
+.venv/
+venv/
+env/
+*.egg
+
+# ── Node ──────────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.next/
+.nuxt/
+.cache/
+*.local
+
+# ── Database & data files ─────────────────────────────────────────────────────
+crypto-sentinel/data/*.db
+crypto-sentinel/data/*.sqlite
+crypto-sentinel/data/*.sqlite3
+
+# ── LLM Models (large GGUF files) ─────────────────────────────────────────────
+crypto-sentinel/models/*.gguf
+crypto-sentinel/models/*.bin
+crypto-sentinel/models/*.safetensors
+
+# ── ML artifacts ──────────────────────────────────────────────────────────────
+crypto-sentinel/model_artifacts/
+*.pkl
+*.joblib
+*.h5
+
+# ── Logs & temp ───────────────────────────────────────────────────────────────
+*.log
+logs/
+*.tmp
+*.bak
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Secrets (keep .env.example, ignore real .env) ─────────────────────────────
+# NOTE: .env IS committed here because it contains no real secret credentials
+# for this project (NewsAPI key is free-tier public). Remove this exception
+# before adding any real API secrets.
+# .env
+
+# ── Streamlit cache ───────────────────────────────────────────────────────────
+.streamlit/
