@@ -118,9 +118,21 @@ class OllamaAnalyzer:
             json_match = re.search(r'\{[^}]+\}', result_text, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
-                label = result.get("label", "NEUTRAL").upper()
-                if label not in ("BULLISH", "BEARISH", "NEUTRAL", "FUD"):
-                    label = "NEUTRAL"
+                label = result.get("label", "NEUTRAL").upper().strip()
+                # Normalize synonyms Mistral sometimes outputs
+                _LABEL_MAP = {
+                    "POSITIVE":  "BULLISH",
+                    "NEGATIVE":  "BEARISH",
+                    "FEAR":      "FUD",
+                    "UNCERTAIN": "NEUTRAL",
+                    "MIXED":     "NEUTRAL",
+                    "CAUTIOUS":  "NEUTRAL",
+                    "BEARISH":   "BEARISH",
+                    "BULLISH":   "BULLISH",
+                    "NEUTRAL":   "NEUTRAL",
+                    "FUD":       "FUD",
+                }
+                label = _LABEL_MAP.get(label, "NEUTRAL")
                 return {
                     "label": label,
                     "score": float(result.get("score", 0.5)),

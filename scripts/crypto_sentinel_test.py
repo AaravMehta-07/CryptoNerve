@@ -300,7 +300,13 @@ def test_llm_batch():
                 m = re.search(r'\{[^}]+\}', raw, re.DOTALL)
                 if m:
                     res = json.loads(m.group())
-                    label = res.get("label", "?")
+                    _LABEL_MAP = {
+                        "POSITIVE": "BULLISH", "NEGATIVE": "BEARISH",
+                        "FEAR": "FUD", "UNCERTAIN": "NEUTRAL",
+                        "MIXED": "NEUTRAL", "CAUTIOUS": "NEUTRAL",
+                    }
+                    label = res.get("label", "?").upper().strip()
+                    label = _LABEL_MAP.get(label, label)   # normalize synonyms
                     score = float(res.get("score", 0))
                     conf  = float(res.get("confidence", 0))
                     reason = res.get("reasoning", "")
