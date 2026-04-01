@@ -29,9 +29,11 @@ class FearGreedIndex:
             social_volume_component = self._normalize(social_volume, 0, 500)
 
             # 2. Volume Momentum Component (20%)
+            # HIGH-06 FIX: filter to BTC only — mixing all coin volumes is meaningless
             vol_df = pd.read_sql("""
                 SELECT volume FROM price_data
-                WHERE interval = '15m' AND timestamp > NOW() - INTERVAL '48 hours'
+                WHERE coin = 'BTC' AND interval = '15m'
+                AND timestamp > NOW() - INTERVAL '48 hours'
                 ORDER BY timestamp DESC
             """, self.engine)
             if not vol_df.empty and len(vol_df) > 96:
@@ -99,8 +101,8 @@ class FearGreedIndex:
                 pd.DataFrame([result]).to_sql(
                     "fear_greed_index", self.engine, if_exists="append", index=False
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Fear & Greed DB save skipped (duplicate?): {e}")
 
             return result
         except Exception as e:
@@ -111,12 +113,13 @@ class FearGreedIndex:
                     "whale_activity_component": 0.5}
 
     def get_history(self, hours=168):
-        query = f"""
-        SELECT timestamp, index_value, label FROM fear_greed_index
-        WHERE timestamp > NOW() - INTERVAL '{hours} hours'
-        ORDER BY timestamp ASC
-        """
         try:
-            return pd.read_sql(query, self.engine)
-        except Exception:
+            return pd.read_sql(
+                """SELECT timestamp, index_value, label FROM fear_greed_index
+                WHERE timestamp > NOW() - (%(h)s || ' hours')::INTERVAL
+                ORDER BY timestamp ASC""",
+                self.engine, params={"h": str(hours)},
+            )
+        except Exception as e:
+            logger.error(f"Fear & Greed history error: {e}")
             return pd.DataFrame()

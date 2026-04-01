@@ -29,15 +29,15 @@ TRACKED_COINS = {
         "news_keywords": ["solana", "SOL"],
         "color": "#00FFA3",
     },
-    "BNB": {
-        "symbol": "BNBUSDT",
-        "name": "BNB",
-        "binance_symbol": "BNBUSDT",
-        "coingecko_id": "binancecoin",
-        "subreddits": ["binance", "cryptocurrency"],
+    "DOGE": {
+        "symbol": "DOGEUSDT",
+        "name": "Dogecoin",
+        "binance_symbol": "DOGEUSDT",
+        "coingecko_id": "dogecoin",
+        "subreddits": ["dogecoin", "SatoshiStreetBets", "cryptocurrency"],
         "etherscan_contract": None,
-        "news_keywords": ["BNB", "binance coin"],
-        "color": "#F3BA2F",
+        "news_keywords": ["dogecoin", "DOGE", "doge", "elon"],
+        "color": "#C2A633",
     },
     "XRP": {
         "symbol": "XRPUSDT",

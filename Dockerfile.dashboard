@@ -2,8 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# CRIT-08 FIX: Added cmake and build-essential required by llama-cpp-python compilation.
+# Without these, `pip install llama-cpp-python` fails during the Docker build.
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    cmake \
+    build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 

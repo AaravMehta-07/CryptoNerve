@@ -4,6 +4,7 @@ from loguru import logger
 from config.settings import settings
 from config.constants import WHALE_ALERT_THRESHOLD_USD
 from database.connection import get_engine
+from sqlalchemy import text
 import pandas as pd
 
 
@@ -42,6 +43,9 @@ class OnchainCollector:
             response = requests.get(url, params=params, timeout=10)
             latest_block = int(response.json()["result"], 16)
 
+            # MED-06 FIX: fetch ETH price once, not per-transaction
+            eth_price = self._get_eth_price()
+
             for address in list(self.exchange_addresses.keys())[:5]:
                 params = {
                     "module": "account",
@@ -62,7 +66,6 @@ class OnchainCollector:
                         for tx in data["result"]:
                             value_eth = int(tx["value"]) / 1e18
                             if value_eth >= min_value_eth:
-                                eth_price = self._get_eth_price()
                                 value_usd = value_eth * eth_price
 
                                 is_from_exchange = self._is_exchange(tx["from"])
@@ -110,23 +113,29 @@ class OnchainCollector:
             return 3000.0
 
     def aggregate_onchain_metrics(self, coin, window_hours=4):
-        query = f"""
+        query = text("""
         SELECT
             COUNT(*) as whale_tx_count,
             COALESCE(SUM(value_usd), 0) as whale_volume_usd,
             COALESCE(SUM(CASE WHEN tx_type = 'exchange_inflow' THEN value_usd ELSE 0 END), 0) as exchange_inflow_usd,
             COALESCE(SUM(CASE WHEN tx_type = 'exchange_outflow' THEN value_usd ELSE 0 END), 0) as exchange_outflow_usd,
-            COUNT(CASE WHEN value_usd > {WHALE_ALERT_THRESHOLD_USD} THEN 1 END) as large_tx_count
+            COUNT(CASE WHEN value_usd > :threshold THEN 1 END) as large_tx_count
         FROM whale_transactions
-        WHERE token_symbol = '{coin}'
-        AND timestamp > NOW() - INTERVAL '{window_hours} hours'
-        """
+        WHERE token_symbol = :coin
+        AND timestamp > NOW() - (:window_hours || ' hours')::INTERVAL
+        """)
         try:
-            df = pd.read_sql(query, self.engine)
+            with self.engine.connect() as conn:
+                df = pd.read_sql(query, conn, params={
+                    "coin": coin,
+                    "threshold": WHALE_ALERT_THRESHOLD_USD,
+                    "window_hours": str(window_hours),
+                })
             if df.empty:
                 return None
 
             row = df.iloc[0]
+            # net_flow > 0 means outflow > inflow = coins leaving exchanges = accumulation
             net_flow = row["exchange_outflow_usd"] - row["exchange_inflow_usd"]
             max_expected_volume = 100_000_000
             whale_activity_score = min(row["whale_volume_usd"] / max_expected_volume, 1.0)
@@ -141,24 +150,38 @@ class OnchainCollector:
                 "net_flow_usd": float(net_flow),
                 "large_tx_count": int(row["large_tx_count"]),
                 "whale_activity_score": float(whale_activity_score),
-                "accumulation_signal": "ACCUMULATING" if net_flow > 0 else "DISTRIBUTING",
+                # CRIT-05 FIX: column removed — not in schema; signal computed in signal_generator
             }
         except Exception as e:
             logger.error(f"Aggregation error: {e}")
             return None
 
     def save_transactions(self, transactions):
+        """Batch insert whale transactions (MED-01)."""
         if not transactions:
             return 0
+
+        insert_sql = text("""
+            INSERT INTO whale_transactions
+                (tx_hash, blockchain, from_address, to_address, value_usd, value_native,
+                 token_symbol, block_number, timestamp, tx_type, is_exchange_from, is_exchange_to)
+            VALUES
+                (:tx_hash, :blockchain, :from_address, :to_address, :value_usd, :value_native,
+                 :token_symbol, :block_number, :timestamp, :tx_type, :is_exchange_from, :is_exchange_to)
+            ON CONFLICT (tx_hash) DO NOTHING
+        """)
         saved = 0
-        for tx in transactions:
-            try:
-                pd.DataFrame([tx]).to_sql(
-                    "whale_transactions", self.engine, if_exists="append", index=False
-                )
-                saved += 1
-            except Exception:
-                pass
+        try:
+            with self.engine.begin() as conn:
+                for tx in transactions:
+                    try:
+                        conn.execute(insert_sql, tx)
+                        saved += 1
+                    except Exception as e:
+                        logger.debug(f"TX insert skipped ({tx.get('tx_hash', '')[:10]}): {e}")
+        except Exception as e:
+            logger.error(f"Batch whale_transactions insert error: {e}")
+
         logger.info(f"Saved {saved}/{len(transactions)} whale transactions")
         return saved
 
@@ -167,17 +190,30 @@ class OnchainCollector:
         txs = self.fetch_eth_whale_transactions(min_value_eth=50)
         self.save_transactions(txs)
 
-        for coin in ["ETH", "BTC"]:
-            for window in [1, 4, 24]:
-                metrics = self.aggregate_onchain_metrics(coin, window)
-                if metrics:
-                    metrics["timestamp"] = datetime.now(timezone.utc)
-                    try:
-                        pd.DataFrame([metrics]).to_sql(
-                            "onchain_metrics", self.engine, if_exists="append", index=False
-                        )
-                    except Exception:
-                        pass
+        insert_sql = text("""
+            INSERT INTO onchain_metrics
+                (coin, timestamp, window_size, whale_tx_count, whale_volume_usd,
+                 exchange_inflow_usd, exchange_outflow_usd, net_flow_usd,
+                 large_tx_count, whale_activity_score)
+            VALUES
+                (:coin, :timestamp, :window_size, :whale_tx_count, :whale_volume_usd,
+                 :exchange_inflow_usd, :exchange_outflow_usd, :net_flow_usd,
+                 :large_tx_count, :whale_activity_score)
+            ON CONFLICT (coin, timestamp, window_size) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                for coin in ["ETH", "BTC"]:
+                    for window in [1, 4, 24]:
+                        metrics = self.aggregate_onchain_metrics(coin, window)
+                        if metrics:
+                            metrics["timestamp"] = datetime.now(timezone.utc)
+                            try:
+                                conn.execute(insert_sql, metrics)
+                            except Exception as e:
+                                logger.debug(f"Onchain metrics insert skipped: {e}")
+        except Exception as e:
+            logger.error(f"Onchain metrics batch insert error: {e}")
 
         logger.info(f"On-chain cycle complete: {len(txs)} transactions")
         return len(txs)

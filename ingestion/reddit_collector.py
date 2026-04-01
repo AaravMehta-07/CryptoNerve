@@ -5,6 +5,7 @@ from loguru import logger
 from config.settings import settings
 from config.coins import TRACKED_COINS
 from database.connection import get_engine
+from sqlalchemy import text
 import pandas as pd
 
 
@@ -98,39 +99,61 @@ class RedditCollector:
         return comments
 
     def save_posts(self, posts):
+        """Batch insert posts using raw SQL with proper TEXT[] type (CRIT-04, MED-01)."""
         if not posts:
             return 0
 
         saved = 0
-        for post in posts:
-            try:
-                post_copy = post.copy()
-                post_copy["coin_mentions"] = "{" + ",".join(post_copy["coin_mentions"]) + "}"
-                pd.DataFrame([post_copy]).to_sql(
-                    "reddit_posts", self.engine, if_exists="append", index=False, method="multi"
-                )
-                saved += 1
-            except Exception:
-                pass
+        insert_sql = text("""
+            INSERT INTO reddit_posts
+                (post_id, subreddit, title, selftext, author, score, num_comments, created_utc, url, coin_mentions)
+            VALUES
+                (:post_id, :subreddit, :title, :selftext, :author, :score, :num_comments, :created_utc, :url, :coin_mentions)
+            ON CONFLICT (post_id) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                for post in posts:
+                    try:
+                        conn.execute(insert_sql, {
+                            **{k: v for k, v in post.items() if k != "coin_mentions"},
+                            "coin_mentions": post["coin_mentions"],  # list → psycopg2 passes as TEXT[]
+                        })
+                        saved += 1
+                    except Exception as e:
+                        logger.debug(f"Post insert skipped ({post.get('post_id')}): {e}")
+        except Exception as e:
+            logger.error(f"Batch post insert error: {e}")
 
         logger.info(f"Saved {saved}/{len(posts)} new Reddit posts")
         return saved
 
     def save_comments(self, comments):
+        """Batch insert comments using raw SQL with proper TEXT[] type (CRIT-04, MED-01)."""
         if not comments:
             return 0
 
         saved = 0
-        for comment in comments:
-            try:
-                comment_copy = comment.copy()
-                comment_copy["coin_mentions"] = "{" + ",".join(comment_copy["coin_mentions"]) + "}"
-                pd.DataFrame([comment_copy]).to_sql(
-                    "reddit_comments", self.engine, if_exists="append", index=False, method="multi"
-                )
-                saved += 1
-            except Exception:
-                pass
+        insert_sql = text("""
+            INSERT INTO reddit_comments
+                (comment_id, post_id, body, author, score, created_utc, coin_mentions)
+            VALUES
+                (:comment_id, :post_id, :body, :author, :score, :created_utc, :coin_mentions)
+            ON CONFLICT (comment_id) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                for comment in comments:
+                    try:
+                        conn.execute(insert_sql, {
+                            **{k: v for k, v in comment.items() if k != "coin_mentions"},
+                            "coin_mentions": comment["coin_mentions"],
+                        })
+                        saved += 1
+                    except Exception as e:
+                        logger.debug(f"Comment insert skipped ({comment.get('comment_id')}): {e}")
+        except Exception as e:
+            logger.error(f"Batch comment insert error: {e}")
 
         logger.info(f"Saved {saved}/{len(comments)} new Reddit comments")
         return saved

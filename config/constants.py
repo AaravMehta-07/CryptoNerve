@@ -6,6 +6,11 @@ FUD = "FUD"
 
 SENTIMENT_LABELS = [BULLISH, NEUTRAL, BEARISH, FUD]
 
+# Prediction configuration
+PREDICTION_INTERVAL = "1h"          # model predicts next 1h candle direction
+TRAINING_WINDOW_DAYS = 90           # 3 months of 1h candles
+PREDICTION_INTERVAL_MINUTES = 60   # run predictions every 60 minutes
+
 # Signal Types
 BUY = "BUY"
 SELL = "SELL"
@@ -48,7 +53,7 @@ OBV_PERIOD = 20
 # Model Thresholds
 BUY_SENTIMENT_THRESHOLD = 0.65
 SELL_SENTIMENT_THRESHOLD = 0.35
-MIN_SIGNAL_CONFIDENCE = 0.55
+MIN_SIGNAL_CONFIDENCE = 0.65   # Only signal when ≥65% confident (accuracy vs. frequency tradeoff)
 WHALE_ALERT_THRESHOLD_USD = 1_000_000
 
 # Backtesting

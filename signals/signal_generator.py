@@ -29,18 +29,20 @@ class SignalGenerator:
             logger.warning(f"No prediction available for {coin}")
             return None
 
-        # Sentiment
-        sent_df = pd.read_sql(f"""
-            SELECT avg_sentiment, social_volume, sentiment_velocity FROM sentiment_aggregated
-            WHERE coin = '{coin}' AND window_size = '4h' ORDER BY window_start DESC LIMIT 1
-        """, self.engine)
+        # Sentiment — parameterized query (MED-02)
+        sent_df = pd.read_sql(
+            """SELECT avg_sentiment, social_volume, sentiment_velocity FROM sentiment_aggregated
+            WHERE coin = %(coin)s AND window_size = '4h' ORDER BY window_start DESC LIMIT 1""",
+            self.engine, params={"coin": coin},
+        )
         sentiment_score = float(sent_df.iloc[0]["avg_sentiment"]) if not sent_df.empty else 0.5
 
         # On-chain
-        onchain_df = pd.read_sql(f"""
-            SELECT net_flow_usd, whale_activity_score FROM onchain_metrics
-            WHERE coin = '{coin}' ORDER BY timestamp DESC LIMIT 1
-        """, self.engine)
+        onchain_df = pd.read_sql(
+            """SELECT net_flow_usd, whale_activity_score FROM onchain_metrics
+            WHERE coin = %(coin)s ORDER BY timestamp DESC LIMIT 1""",
+            self.engine, params={"coin": coin},
+        )
         whale_accumulating = False
         onchain_score = 0.5
         if not onchain_df.empty:
@@ -49,10 +51,11 @@ class SignalGenerator:
             onchain_score = float(onchain_df.iloc[0]["whale_activity_score"] or 0.5)
 
         # Technical
-        tech_df = pd.read_sql(f"""
-            SELECT rsi, macd_histogram FROM technical_indicators
-            WHERE coin = '{coin}' ORDER BY timestamp DESC LIMIT 1
-        """, self.engine)
+        tech_df = pd.read_sql(
+            """SELECT rsi, macd_histogram FROM technical_indicators
+            WHERE coin = %(coin)s ORDER BY timestamp DESC LIMIT 1""",
+            self.engine, params={"coin": coin},
+        )
         technical_score = 0.5
         if not tech_df.empty:
             rsi = float(tech_df.iloc[0]["rsi"] or 50)
@@ -63,11 +66,16 @@ class SignalGenerator:
             else:
                 technical_score = 0.5 + (0.5 - rsi / 100) * 0.3
 
-        # Composite score
-        pred_bullish = 1 if prediction["direction"] == "UP" else 0
+        # HIGH-04 FIX: DOWN prediction now pushes score below 0.5 instead of contributing 0.
+        # pred_score = confidence if UP, = (1 - confidence) if DOWN.
+        pred_score = (
+            prediction["confidence"]
+            if prediction["direction"] == "UP"
+            else (1 - prediction["confidence"])
+        )
         composite = (
             sentiment_score * 0.30
-            + pred_bullish * prediction["confidence"] * 0.30
+            + pred_score * 0.30
             + onchain_score * 0.20
             + technical_score * 0.20
         )

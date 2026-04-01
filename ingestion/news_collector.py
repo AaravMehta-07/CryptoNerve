@@ -5,7 +5,7 @@ from loguru import logger
 from config.settings import settings
 from config.coins import TRACKED_COINS
 from database.connection import get_engine
-import pandas as pd
+from sqlalchemy import text
 import re
 import requests
 
@@ -104,19 +104,28 @@ class NewsCollector:
         return articles
 
     def save_articles(self, articles):
+        """Batch insert articles using raw SQL with proper TEXT[] type (CRIT-04, MED-01)."""
         if not articles:
             return 0
+
         saved = 0
-        for article in articles:
-            try:
-                article_copy = article.copy()
-                article_copy["coin_mentions"] = "{" + ",".join(article_copy["coin_mentions"]) + "}"
-                pd.DataFrame([article_copy]).to_sql(
-                    "news_articles", self.engine, if_exists="append", index=False, method="multi"
-                )
-                saved += 1
-            except Exception:
-                pass
+        insert_sql = text("""
+            INSERT INTO news_articles
+                (article_id, source_name, title, description, content, url, published_at, coin_mentions)
+            VALUES
+                (:article_id, :source_name, :title, :description, :content, :url, :published_at, :coin_mentions)
+            ON CONFLICT (article_id) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                for article in articles:
+                    try:
+                        conn.execute(insert_sql, article)
+                        saved += 1
+                    except Exception as e:
+                        logger.debug(f"Article insert skipped ({article.get('article_id')}): {e}")
+        except Exception as e:
+            logger.error(f"Batch article insert error: {e}")
 
         logger.info(f"Saved {saved}/{len(articles)} new news articles")
         return saved

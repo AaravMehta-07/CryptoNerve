@@ -5,6 +5,7 @@ from loguru import logger
 from config.settings import settings
 from config.coins import TRACKED_COINS
 from database.connection import get_engine
+from sqlalchemy import text
 
 
 class PriceCollector:
@@ -117,6 +118,7 @@ class PriceCollector:
         return sorted(all_records, key=lambda x: x["timestamp"])
 
     def save_prices(self, coin_symbol, records, interval="15m"):
+        """Batch upsert price records — MED-01 fix (no row-by-row inserts)."""
         if not records:
             return 0
 
@@ -124,25 +126,39 @@ class PriceCollector:
         df["coin"] = coin_symbol
         df["interval"] = interval
 
+        insert_sql = text("""
+            INSERT INTO price_data
+                (coin, interval, timestamp, open, high, low, close, volume, quote_volume, num_trades)
+            VALUES
+                (:coin, :interval, :timestamp, :open, :high, :low, :close, :volume, :quote_volume, :num_trades)
+            ON CONFLICT (coin, interval, timestamp) DO NOTHING
+        """)
         saved = 0
-        for _, row in df.iterrows():
-            try:
-                pd.DataFrame([row.to_dict()]).to_sql(
-                    "price_data", self.engine, if_exists="append", index=False
-                )
-                saved += 1
-            except Exception:
-                pass
+        try:
+            with self.engine.begin() as conn:
+                for rec in df.to_dict(orient="records"):
+                    try:
+                        conn.execute(insert_sql, rec)
+                        saved += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Batch price insert error for {coin_symbol}: {e}")
 
-        logger.info(f"Saved {saved}/{len(records)} price records for {coin_symbol}")
+        logger.info(f"Saved {saved}/{len(records)} price records for {coin_symbol} ({interval})")
         return saved
 
     def run(self):
+        """Light incremental collection cycle — fetches last 10 candles for both intervals."""
         logger.info("Starting price collection cycle...")
         total = 0
         for symbol, info in TRACKED_COINS.items():
-            records = self.fetch_klines(info["binance_symbol"], interval="15m", limit=10)
-            total += self.save_prices(symbol, records, "15m")
+            # 1h candles for ML predictions
+            records_1h = self.fetch_klines(info["binance_symbol"], interval="1h", limit=10)
+            total += self.save_prices(symbol, records_1h, "1h")
+            # 15m candles for dashboard intraday charts
+            records_15m = self.fetch_klines(info["binance_symbol"], interval="15m", limit=10)
+            total += self.save_prices(symbol, records_15m, "15m")
 
         logger.info(f"Price cycle complete: {total} records saved")
         return total

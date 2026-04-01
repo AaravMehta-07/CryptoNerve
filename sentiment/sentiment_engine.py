@@ -6,6 +6,7 @@ from sentiment.finbert_analyzer import FinBERTAnalyzer
 from sentiment.narrative_detector import NarrativeDetector
 from database.connection import get_engine
 from config.coins import TRACKED_COINS
+from sqlalchemy import text
 
 
 class SentimentEngine:
@@ -107,24 +108,34 @@ class SentimentEngine:
         results = self.primary_analyzer.batch_analyze(texts)
 
         saved = 0
-        for result in results:
-            try:
-                record = {
-                    "source_type": result["source_type"],
-                    "source_id": result["source_id"],
-                    "coin": result["coin"],
-                    "text_content": result["text_content"],
-                    "sentiment_label": result["label"],
-                    "sentiment_score": result["score"],
-                    "confidence": result["confidence"],
-                    "model_used": result["model"],
-                }
-                pd.DataFrame([record]).to_sql(
-                    "sentiment_scores", self.engine, if_exists="append", index=False
-                )
-                saved += 1
-            except Exception:
-                pass
+        insert_sql = text("""
+            INSERT INTO sentiment_scores
+                (source_type, source_id, coin, text_content, sentiment_label,
+                 sentiment_score, confidence, model_used)
+            VALUES
+                (:source_type, :source_id, :coin, :text_content, :sentiment_label,
+                 :sentiment_score, :confidence, :model_used)
+            ON CONFLICT (source_type, source_id, coin) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                for result in results:
+                    try:
+                        conn.execute(insert_sql, {
+                            "source_type": result["source_type"],
+                            "source_id": result["source_id"],
+                            "coin": result["coin"],
+                            "text_content": result["text_content"],
+                            "sentiment_label": result["label"],
+                            "sentiment_score": result["score"],
+                            "confidence": result["confidence"],
+                            "model_used": result["model"],
+                        })
+                        saved += 1
+                    except Exception as e:
+                        logger.debug(f"Sentiment insert skipped: {e}")
+        except Exception as e:
+            logger.error(f"Batch sentiment insert error: {e}")
 
         logger.info(f"Saved {saved}/{len(results)} sentiment scores")
         return saved
@@ -157,9 +168,11 @@ class SentimentEngine:
             neutral_count = int(label_counts.get("NEUTRAL", 0))
             fud_count = int(label_counts.get("FUD", 0))
 
+            # HIGH-07 FIX: non-overlapping slices for velocity calculation
             if len(df) >= 6:
-                recent = df.head(len(df) // 2)["sentiment_score"].mean()
-                older = df.tail(len(df) // 2)["sentiment_score"].mean()
+                half = len(df) // 2
+                recent = df.head(half)["sentiment_score"].mean()
+                older = df.tail(len(df) - half)["sentiment_score"].mean()
                 velocity = recent - older
             else:
                 velocity = 0.0
@@ -186,16 +199,28 @@ class SentimentEngine:
                 "social_volume": len(df),
             }
 
+            # CRIT-06 FIX: use raw SQL so psycopg2 sends list as proper TEXT[]
             try:
-                save_record = result.copy()
-                save_record["dominant_narratives"] = (
-                    "{" + ",".join(save_record["dominant_narratives"]) + "}"
-                )
-                pd.DataFrame([save_record]).to_sql(
-                    "sentiment_aggregated", self.engine, if_exists="append", index=False
-                )
-            except Exception:
-                pass
+                insert_agg = text("""
+                    INSERT INTO sentiment_aggregated
+                        (coin, window_start, window_end, window_size, avg_sentiment,
+                         median_sentiment, sentiment_std, bullish_count, bearish_count,
+                         neutral_count, fud_count, total_posts, sentiment_velocity,
+                         sentiment_acceleration, dominant_narratives, social_volume)
+                    VALUES
+                        (:coin, :window_start, :window_end, :window_size, :avg_sentiment,
+                         :median_sentiment, :sentiment_std, :bullish_count, :bearish_count,
+                         :neutral_count, :fud_count, :total_posts, :sentiment_velocity,
+                         :sentiment_acceleration, :dominant_narratives, :social_volume)
+                    ON CONFLICT (coin, window_start, window_size) DO NOTHING
+                """)
+                with self.engine.begin() as conn:
+                    conn.execute(insert_agg, {
+                        **{k: v for k, v in result.items() if k != "dominant_narratives"},
+                        "dominant_narratives": result["dominant_narratives"],  # list → TEXT[]
+                    })
+            except Exception as e:
+                logger.debug(f"Sentiment aggregated insert skipped: {e}")
 
             return result
         except Exception as e:
