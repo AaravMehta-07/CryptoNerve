@@ -1,0 +1,64 @@
+TRACKED_COINS = {
+    "BTC": {
+        "symbol": "BTCUSDT",
+        "name": "Bitcoin",
+        "binance_symbol": "BTCUSDT",
+        "coingecko_id": "bitcoin",
+        "subreddits": ["bitcoin", "cryptocurrency"],
+        "etherscan_contract": None,
+        "news_keywords": ["bitcoin", "BTC", "btc"],
+        "color": "#F7931A",
+    },
+    "ETH": {
+        "symbol": "ETHUSDT",
+        "name": "Ethereum",
+        "binance_symbol": "ETHUSDT",
+        "coingecko_id": "ethereum",
+        "subreddits": ["ethereum", "ethtrader", "cryptocurrency"],
+        "etherscan_contract": None,
+        "news_keywords": ["ethereum", "ETH", "ether"],
+        "color": "#627EEA",
+    },
+    "SOL": {
+        "symbol": "SOLUSDT",
+        "name": "Solana",
+        "binance_symbol": "SOLUSDT",
+        "coingecko_id": "solana",
+        "subreddits": ["solana", "cryptocurrency"],
+        "etherscan_contract": None,
+        "news_keywords": ["solana", "SOL"],
+        "color": "#00FFA3",
+    },
+    "DOGE": {
+        "symbol": "DOGEUSDT",
+        "name": "Dogecoin",
+        "binance_symbol": "DOGEUSDT",
+        "coingecko_id": "dogecoin",
+        "subreddits": ["dogecoin", "SatoshiStreetBets", "cryptocurrency"],
+        "etherscan_contract": None,
+        "news_keywords": ["dogecoin", "DOGE", "doge", "elon"],
+        "color": "#C2A633",
+    },
+    "XRP": {
+        "symbol": "XRPUSDT",
+        "name": "XRP",
+        "binance_symbol": "XRPUSDT",
+        "coingecko_id": "ripple",
+        "subreddits": ["ripple", "xrp", "cryptocurrency"],
+        "etherscan_contract": None,
+        "news_keywords": ["XRP", "ripple"],
+        "color": "#00AAE4",
+    },
+}
+
+# India-specific exchange price tracking
+INDIA_EXCHANGES = {
+    "wazirx": {
+        "base_url": "https://api.wazirx.com/sapi/v1",
+        "pairs": {
+            "BTC": "btcinr",
+            "ETH": "ethinr",
+            "SOL": "solinr",
+        },
+    }
+}

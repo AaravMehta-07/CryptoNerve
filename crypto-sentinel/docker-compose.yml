@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: crypto_sentinel_db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-crypto_sentinel}
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sentinel_secure_2026}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d crypto_sentinel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    container_name: crypto_sentinel_pipeline
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=postgres
+      # Mount the local models dir so the GGUF is accessible inside the container
+      - LLM_MODEL_PATH=/app/models/mistral-7b-instruct-v0.1.Q3_K_M.gguf
+      # Set LLM_N_GPU_LAYERS=-1 if the host has a CUDA GPU
+      - LLM_N_GPU_LAYERS=${LLM_N_GPU_LAYERS:-0}
+      - LLM_N_THREADS=${LLM_N_THREADS:-8}
+    restart: unless-stopped
+    volumes:
+      - ./models:/app/models:ro          # GGUF files (read-only)
+      - model_artifacts:/app/model_artifacts
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: crypto_sentinel_dashboard
+    ports:
+      - "8501:8501"
+    depends_on:
+      - postgres
+      - pipeline
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=postgres
+      - LLM_MODEL_PATH=/app/models/mistral-7b-instruct-v0.1.Q3_K_M.gguf
+      - LLM_N_GPU_LAYERS=${LLM_N_GPU_LAYERS:-0}
+      - LLM_N_THREADS=${LLM_N_THREADS:-8}
+    volumes:
+      - ./models:/app/models:ro
+      - model_artifacts:/app/model_artifacts
+
+volumes:
+  pgdata:
+  model_artifacts:

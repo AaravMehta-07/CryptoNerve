@@ -1,0 +1,45 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    cmake \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY config/ ./config/
+COPY database/ ./database/
+COPY ingestion/ ./ingestion/
+COPY sentiment/ ./sentiment/
+COPY features/ ./features/
+COPY models/*.py ./models/
+COPY signals/ ./signals/
+COPY backtesting/ ./backtesting/
+COPY reports/ ./reports/
+COPY explainability/ ./explainability/
+COPY scripts/ ./scripts/
+
+# models/*.gguf is mounted at runtime via the docker-compose volume:
+#   ./models:/app/models:ro
+# so the GGUF is NOT baked into the image (3.3 GB)
+
+RUN printf '#!/bin/bash\n\
+echo "Verifying GGUF model..."\n\
+if [ ! -f "$LLM_MODEL_PATH" ]; then\n\
+    echo "ERROR: GGUF not found at $LLM_MODEL_PATH"\n\
+    echo "Ensure the models/ directory is mounted and contains the GGUF file."\n\
+    exit 1\n\
+fi\n\
+echo "Model found: $LLM_MODEL_PATH"\n\
+echo "Starting pipeline..."\n\
+python -m ingestion.pipeline_orchestrator\n' > /app/entrypoint.sh
+
+RUN chmod +x /app/entrypoint.sh
+
+CMD ["/bin/bash", "/app/entrypoint.sh"]

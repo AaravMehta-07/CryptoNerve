@@ -1,0 +1,255 @@
+import pandas as pd
+from datetime import datetime, timezone, timedelta
+from loguru import logger
+from sentiment.ollama_analyzer import OllamaAnalyzer
+from sentiment.finbert_analyzer import FinBERTAnalyzer
+from sentiment.narrative_detector import NarrativeDetector
+from database.connection import get_engine
+from database.sql_compat import time_ago
+from config.coins import TRACKED_COINS
+from sqlalchemy import text
+
+
+class SentimentEngine:
+    def __init__(self):
+        self.ollama = OllamaAnalyzer()
+        self.finbert = FinBERTAnalyzer()
+        self.narrative_detector = NarrativeDetector()
+        self.engine = get_engine()
+
+        if self.ollama.available:
+            self.primary_analyzer = self.ollama
+            logger.info("Using Ollama (Mistral) as primary sentiment analyzer")
+        elif self.finbert.available:
+            self.primary_analyzer = self.finbert
+            logger.info("Using FinBERT as fallback sentiment analyzer")
+        else:
+            logger.error("NO sentiment analyzer available!")
+            self.primary_analyzer = None
+
+    def get_unanalyzed_texts(self, limit=50):
+        query = """
+        (
+            SELECT
+                'reddit_post' as source_type,
+                post_id as source_id,
+                title || ' ' || COALESCE(selftext, '') as text,
+                coin_mentions,
+                created_utc
+            FROM reddit_posts
+            WHERE post_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'reddit_post')
+            ORDER BY created_utc DESC
+            LIMIT %s
+        )
+        UNION ALL
+        (
+            SELECT
+                'reddit_comment' as source_type,
+                comment_id as source_id,
+                body as text,
+                coin_mentions,
+                created_utc
+            FROM reddit_comments
+            WHERE comment_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'reddit_comment')
+            ORDER BY created_utc DESC
+            LIMIT %s
+        )
+        UNION ALL
+        (
+            SELECT
+                'news' as source_type,
+                article_id as source_id,
+                title || ' ' || COALESCE(description, '') as text,
+                coin_mentions,
+                published_at as created_utc
+            FROM news_articles
+            WHERE article_id NOT IN (SELECT source_id FROM sentiment_scores WHERE source_type = 'news')
+            ORDER BY published_at DESC
+            LIMIT %s
+        )
+        """
+        try:
+            df = pd.read_sql(query, self.engine, params=(limit, limit, limit))
+            texts = []
+            for _, row in df.iterrows():
+                coins = row["coin_mentions"]
+                if isinstance(coins, str):
+                    coins = coins.strip("{}").split(",") if coins.strip("{}") else []
+                elif not isinstance(coins, list):
+                    coins = []
+
+                if not coins:
+                    coins = ["BTC"]
+
+                for coin in coins:
+                    coin = coin.strip()
+                    if coin in TRACKED_COINS:
+                        texts.append({
+                            "source_type": row["source_type"],
+                            "source_id": row["source_id"],
+                            "text": row["text"][:2000],
+                            "coin": coin,
+                        })
+            return texts
+        except Exception as e:
+            logger.error(f"Error getting unanalyzed texts: {e}")
+            return []
+
+    def analyze_and_save(self, limit=50):
+        if not self.primary_analyzer:
+            logger.error("No analyzer available")
+            return 0
+
+        texts = self.get_unanalyzed_texts(limit)
+        if not texts:
+            logger.info("No new texts to analyze")
+            return 0
+
+        logger.info(f"Analyzing {len(texts)} texts...")
+        results = self.primary_analyzer.batch_analyze(texts)
+
+        saved = 0
+        insert_sql = text("""
+            INSERT INTO sentiment_scores
+                (source_type, source_id, coin, text_content, sentiment_label,
+                 sentiment_score, confidence, model_used)
+            VALUES
+                (:source_type, :source_id, :coin, :text_content, :sentiment_label,
+                 :sentiment_score, :confidence, :model_used)
+            ON CONFLICT (source_type, source_id, coin) DO NOTHING
+        """)
+        try:
+            with self.engine.begin() as conn:
+                for result in results:
+                    try:
+                        conn.execute(insert_sql, {
+                            "source_type": result["source_type"],
+                            "source_id": result["source_id"],
+                            "coin": result["coin"],
+                            "text_content": result["text_content"],
+                            "sentiment_label": result["label"],
+                            "sentiment_score": result["score"],
+                            "confidence": result["confidence"],
+                            "model_used": result["model"],
+                        })
+                        saved += 1
+                    except Exception as e:
+                        logger.debug(f"Sentiment insert skipped: {e}")
+        except Exception as e:
+            logger.error(f"Batch sentiment insert error: {e}")
+
+        logger.info(f"Saved {saved}/{len(results)} sentiment scores")
+        return saved
+
+    def aggregate_sentiment(self, coin, window_hours=4):
+        cutoff = time_ago(hours=window_hours)
+        query = """
+        SELECT
+            sentiment_label,
+            sentiment_score,
+            confidence,
+            text_content,
+            analyzed_at
+        FROM sentiment_scores
+        WHERE coin = :coin
+        AND analyzed_at >= :cutoff
+        ORDER BY analyzed_at DESC
+        """
+        try:
+            df = pd.read_sql(query, self.engine, params={"coin": coin, "cutoff": cutoff})
+            if df.empty:
+                return None
+
+            avg_sentiment = df["sentiment_score"].mean()
+            median_sentiment = df["sentiment_score"].median()
+            sentiment_std = df["sentiment_score"].std()
+
+            label_counts = df["sentiment_label"].value_counts()
+            bullish_count = int(label_counts.get("BULLISH", 0))
+            bearish_count = int(label_counts.get("BEARISH", 0))
+            neutral_count = int(label_counts.get("NEUTRAL", 0))
+            fud_count = int(label_counts.get("FUD", 0))
+
+            # HIGH-07 FIX: non-overlapping slices for velocity calculation
+            if len(df) >= 6:
+                half = len(df) // 2
+                recent = df.head(half)["sentiment_score"].mean()
+                older = df.tail(len(df) - half)["sentiment_score"].mean()
+                velocity = recent - older
+            else:
+                velocity = 0.0
+
+            all_texts = df["text_content"].tolist()
+            narratives = self.narrative_detector.detect_narratives(all_texts)
+
+            result = {
+                "coin": coin,
+                "window_start": datetime.now(timezone.utc) - timedelta(hours=window_hours),
+                "window_end": datetime.now(timezone.utc),
+                "window_size": f"{window_hours}h",
+                "avg_sentiment": round(avg_sentiment, 4),
+                "median_sentiment": round(median_sentiment, 4),
+                "sentiment_std": round(sentiment_std, 4) if not pd.isna(sentiment_std) else 0.0,
+                "bullish_count": bullish_count,
+                "bearish_count": bearish_count,
+                "neutral_count": neutral_count,
+                "fud_count": fud_count,
+                "total_posts": len(df),
+                "sentiment_velocity": round(velocity, 4),
+                "sentiment_acceleration": 0.0,
+                "dominant_narratives": [n[0] for n in narratives[:5]],
+                "social_volume": len(df),
+            }
+
+            # CRIT-06 FIX: use raw SQL so psycopg2 sends list as proper TEXT[]
+            try:
+                insert_agg = text("""
+                    INSERT INTO sentiment_aggregated
+                        (coin, window_start, window_end, window_size, avg_sentiment,
+                         median_sentiment, sentiment_std, bullish_count, bearish_count,
+                         neutral_count, fud_count, total_posts, sentiment_velocity,
+                         sentiment_acceleration, dominant_narratives, social_volume)
+                    VALUES
+                        (:coin, :window_start, :window_end, :window_size, :avg_sentiment,
+                         :median_sentiment, :sentiment_std, :bullish_count, :bearish_count,
+                         :neutral_count, :fud_count, :total_posts, :sentiment_velocity,
+                         :sentiment_acceleration, :dominant_narratives, :social_volume)
+                    ON CONFLICT (coin, window_start, window_size) DO NOTHING
+                """)
+                with self.engine.begin() as conn:
+                    conn.execute(insert_agg, {
+                        **{k: v for k, v in result.items() if k != "dominant_narratives"},
+                        "dominant_narratives": result["dominant_narratives"],  # list → TEXT[]
+                    })
+            except Exception as e:
+                logger.debug(f"Sentiment aggregated insert skipped: {e}")
+
+            return result
+        except Exception as e:
+            logger.error(f"Aggregation error: {e}")
+            return None
+
+    def get_sentiment_history(self, coin, hours=72):
+        cutoff = time_ago(hours=hours)
+        query = """
+        SELECT avg_sentiment, window_start
+        FROM sentiment_aggregated
+        WHERE coin = :coin AND window_size = '1h'
+        AND window_start >= :cutoff
+        ORDER BY window_start ASC
+        """
+        try:
+            return pd.read_sql(query, self.engine, params={"coin": coin, "cutoff": cutoff})
+        except Exception:
+            return pd.DataFrame()
+
+    def run(self):
+        logger.info("Starting sentiment analysis cycle...")
+        analyzed = self.analyze_and_save(limit=50)
+
+        for coin in TRACKED_COINS.keys():
+            for window in [1, 4, 24]:
+                self.aggregate_sentiment(coin, window)
+
+        logger.info(f"Sentiment cycle complete: {analyzed} texts analyzed")
+        return analyzed
