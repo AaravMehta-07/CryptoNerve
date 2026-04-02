@@ -240,5 +240,5 @@ Crypto markets are highly volatile. Predictions are experimental and must not be
 
 ---
 
-*Crypto Sentinel v1.0 · Built for NMIMS Innovathon 2026*  
+*Crypto Sentinel v1.0*  
 *Python · React · FastAPI · XGBoost · LSTM · AutoGluon · Ollama Mistral 7B*
