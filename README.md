@@ -1,7 +1,7 @@
 
 # 🛡️ Crypto Sentinel
 
-
+**Self-hosted LLM-powered crypto sentiment & price prediction terminal**
 
 > Track 5 coins in real-time with Reddit/news sentiment (local Mistral 7B via llama-cpp-python), on-chain whale intelligence, XGBoost/Prophet/LSTM ensemble predictions, and composite trading signals — all on your own hardware. No cloud LLM fees.
 
