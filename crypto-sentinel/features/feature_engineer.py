@@ -342,7 +342,7 @@ class FeatureEngineer:
         price_df = self._merge_sentiment(price_df, coin, interval)
         price_df = self._merge_onchain(price_df, coin, interval)
         if coin != "BTC":
-            self._add_btc_correlation(price_df, interval, max(1, lookback_hours // 24 + 1))
+            price_df = self._add_btc_correlation(price_df, interval, max(1, lookback_hours // 24 + 1))
 
         # No targets needed — fill NaN and return
         price_df = price_df.ffill().fillna(0)

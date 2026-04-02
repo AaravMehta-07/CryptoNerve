@@ -11,18 +11,34 @@ const SIGNAL_COLORS = {
   STRONG_BUY: '#00FF9C', BUY: '#00D4A8', HOLD: '#4C9BE8', SELL: '#FF7B54', STRONG_SELL: '#FF4C4C'
 }
 
+// Map prediction direction + confidence to signal (with confidence gating)
+const MIN_CONF = 0.55
+function dirToSignal(dir, conf) {
+  if (!dir) return { label: '—', color: 'var(--text-muted)' }
+  const c = parseFloat(conf || 0.5)
+  if (c < MIN_CONF) return { label: 'NO TRADE', color: '#6B7FA3' } // confidence too low
+  if (dir === 'UP')   return c >= 0.65 ? { label: 'STRONG BUY', color: '#00FF9C' } : { label: 'BUY', color: '#00D4A8' }
+  if (dir === 'DOWN') return c >= 0.65 ? { label: 'STRONG SELL', color: '#FF4C4C' } : { label: 'SELL', color: '#FF7B54' }
+  return { label: 'HOLD', color: '#4C9BE8' }
+}
+
 export default function Signals() {
-  const [signals,  setSignals]  = useState([])
-  const [selected, setSelected] = useState(null)
-  const [coin,     setCoin]     = useState('ALL')
-  const [loading,  setLoading]  = useState(true)
+  const [signals,     setSignals]     = useState([])
+  const [selected,    setSelected]    = useState(null)
+  const [coin,        setCoin]        = useState('ALL')
+  const [loading,     setLoading]     = useState(true)
+  const [predictions, setPredictions] = useState([])
   const currCtx = useCurrency()
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
-      const data = await api.signals(coin !== 'ALL' ? { coin, limit: 30 } : { limit: 30 })
+      const [data, preds] = await Promise.all([
+        api.signals(coin !== 'ALL' ? { coin, limit: 30 } : { limit: 30 }),
+        api.predictions()
+      ])
       setSignals(data)
+      setPredictions(preds)
       if (data.length) setSelected(data[0])
       setLoading(false)
     }
@@ -35,6 +51,20 @@ export default function Signals() {
     { subject: 'On-Chain',      val: parseFloat(selected.onchain_score    || 0.5) },
     { subject: 'Technicals',    val: parseFloat(selected.technical_score  || 0.5) },
   ] : []
+
+  // Build the signal matrix: per coin × per horizon
+  const HORIZONS = [1, 4, 24]
+  const coinList = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE']
+  const matrixData = coinList.map(c => {
+    const row = { coin: c }
+    HORIZONS.forEach(h => {
+      const pred = predictions.find(p => p.coin === c && parseInt(p.horizon_hours) === h)
+      row[`${h}h`] = pred ? dirToSignal(pred.predicted_direction, pred.confidence) : { label: '—', color: 'var(--text-muted)' }
+      row[`${h}h_conf`] = pred ? `${(parseFloat(pred.confidence || 0) * 100).toFixed(0)}%` : ''
+      row[`${h}h_age`] = pred?.predicted_at ? timeAgo(pred.predicted_at) : ''
+    })
+    return row
+  })
 
   return (
     <div>
@@ -52,6 +82,57 @@ export default function Signals() {
               onClick={() => setCoin(c)}>{c}</button>
           ))}
         </div>
+      </div>
+
+      {/* ═══ MULTI-TIMEFRAME SIGNAL MATRIX ═══ */}
+      <div className="chart-wrap mb-16">
+        <div className="card-title">📊 Multi-Timeframe Signal Matrix (ML + Ensemble Predictions)</div>
+        <table className="data-table" style={{ fontSize: '0.78rem' }}>
+          <thead>
+            <tr>
+              <th>COIN</th>
+              <th style={{ textAlign: 'center' }}>1H SIGNAL</th>
+              <th style={{ textAlign: 'center' }}>4H SIGNAL</th>
+              <th style={{ textAlign: 'center' }}>24H SIGNAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matrixData.map(row => (
+              <tr key={row.coin}>
+                <td style={{ fontWeight: 700, color: COINS[row.coin]?.color || 'var(--text)', fontFamily: 'var(--font-mono)', fontSize: '0.9rem' }}>
+                  {row.coin}
+                </td>
+                {HORIZONS.map(h => {
+                  const sig = row[`${h}h`]
+                  return (
+                    <td key={h} style={{ textAlign: 'center' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '3px 12px',
+                        borderRadius: 6,
+                        background: `${sig.color}18`,
+                        border: `1px solid ${sig.color}55`,
+                        color: sig.color,
+                        fontWeight: 700,
+                        fontSize: '0.72rem',
+                        fontFamily: 'var(--font-mono)',
+                        letterSpacing: '0.5px',
+                        minWidth: 90,
+                      }}>
+                        {sig.label}
+                      </span>
+                      {row[`${h}h_conf`] && (
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                          {row[`${h}h_conf`]} conf · {row[`${h}h_age`]}
+                        </div>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       <div className="grid-2" style={{ gap: 20 }}>

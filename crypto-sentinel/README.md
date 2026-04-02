@@ -1,72 +1,94 @@
-# 🛡️ Crypto Sentinel
+# 🛡️ Crypto Sentinel — AI Market Intelligence Terminal
 
-**Self-hosted LLM-powered crypto sentiment & price prediction terminal**
+> **Self-hosted LLM-powered crypto sentiment & price prediction terminal**  
+> Real-time market intelligence for BTC, ETH, SOL, XRP, DOGE powered by ensemble ML models, LLM sentiment analysis via Ollama (Mistral 7B), on-chain whale tracking, and composite trading signals.
 
-> Track 5 coins in real-time with Reddit/news sentiment (local Mistral 7B via llama-cpp-python), on-chain whale intelligence, XGBoost/Prophet/LSTM ensemble predictions, and composite trading signals — all on your own hardware. No cloud LLM fees.
+**🏆 NMIMS Innovathon 2026 — Hackathon Project**
+
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python)
+![Ollama](https://img.shields.io/badge/Ollama-Mistral_7B-FF6F61)
+![SQLite](https://img.shields.io/badge/SQLite-Local_DB-003B57?logo=sqlite)
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-Reddit/News → Sentiment (Mistral 7B GGUF + FinBERT) ↘
-Binance OHLCV → Technical Indicators (40+ features)  → Ensemble Signals → Streamlit Dashboard
-Etherscan On-Chain → Whale Flow Analysis              ↗
+Binance API     → Live OHLCV + Price Feeds     ╲
+NewsAPI / RSS   → News Articles → Ollama LLM    → Composite Signal Engine → React Dashboard
+Etherscan API   → Whale / On-Chain Flows        ╱        ↑
+                                                    XGBoost + LSTM + AutoGluon
+                                                    Ensemble ML Predictions
 ```
+
+### Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React 19 + Vite + Recharts |
+| **Backend** | FastAPI (Python) + Uvicorn |
+| **ML Models** | XGBoost, LSTM (TensorFlow), AutoGluon |
+| **LLM** | Ollama → Mistral 7B Instruct (Q4_K_M) |
+| **Database** | SQLite (local, zero-config) |
+| **Data** | Binance, NewsAPI, CryptoCompare, Etherscan |
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Docker Desktop installed
-- 8GB+ RAM (16GB recommended for Mistral 7B)
-- GPU optional but recommended (CUDA 12 supported)
-- Python 3.10+ (if running without Docker)
+- **Python 3.10+**
+- **Node.js 18+**
+- **Ollama** installed with `mistral:7b-instruct-q4_K_M` model
+- 8GB+ RAM (16GB recommended)
+- GPU optional but recommended (GTX 1650+ for Ollama)
 
-### 1. Clone & Configure
+### 1. Clone & Install
+
 ```bash
-git clone https://github.com/AaravMehta-07/CryptoNerve
+git clone https://github.com/AaravMehta-07/CryptoNerve.git
 cd CryptoNerve
-cp .env.example .env
-# Edit .env with your API keys (Reddit, NewsAPI, Etherscan)
-```
 
-### 2. Download the GGUF Model
-The GGUF model (~3.5 GB) is **not included** in this repo (excluded via `.gitignore`).  
-Place it at `models/mistral-7b-instruct-v0.1.Q3_K_M.gguf` or set the `LLM_MODEL_PATH` env variable.
-
-You can download it from [TheBloke on HuggingFace](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF).
-
-### 3. Start Everything
-```bash
-docker compose up -d
-```
-
-### 4. Open Dashboard
-```
-http://localhost:8501
-```
-
-### Running Without Docker
-```bash
+# Backend dependencies
+cd crypto-sentinel
 pip install -r requirements.txt
-python -m pipeline  # or python orchestrator.py
-streamlit run dashboard/app.py
+
+# Frontend dependencies
+cd ../crypto-sentinel-ui
+npm install
 ```
 
-> **Note:** `llama-cpp-python` requires a C++ compiler. For GPU support:  
-> `CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python==0.2.90`
+### 2. Configure API Keys
 
----
+```bash
+cd crypto-sentinel
+cp .env.example .env
+# Edit .env with your API keys
+```
 
-## 🔑 API Keys Required
+### 3. Start Ollama
 
-| Service | Free Tier | Use |
-|---------|-----------|-----|
-| [Reddit](https://www.reddit.com/prefs/apps) | Yes | Social sentiment |
-| [NewsAPI](https://newsapi.org) | 100 req/day | News sentiment |
-| [Etherscan](https://etherscan.io/apis) | 5 req/sec | Whale tracking |
+```bash
+ollama pull mistral:7b-instruct-q4_K_M
+ollama serve
+```
 
-All keys are optional — the system degrades gracefully with warnings if any are missing.
+### 4. Launch Everything
+
+```bash
+cd crypto-sentinel-ui
+npm run dev
+```
+
+This starts both the **React UI** (port 5173) and the **FastAPI backend** (port 8000) concurrently.
+
+### 5. Open Dashboard
+
+```
+http://localhost:5173
+```
 
 ---
 
@@ -74,70 +96,116 @@ All keys are optional — the system degrades gracefully with warnings if any ar
 
 | Page | Description |
 |------|-------------|
-| 📊 Live Dashboard | Multi-coin price cards, Fear & Greed, real-time signals |
-| 📈 Price & Technicals | OHLCV + RSI + MACD + Bollinger Bands |
-| 💬 Sentiment Analysis | Sentiment timeline, FUD/bullish composition, narrative detection |
-| 🐋 On-Chain Intelligence | Whale flows, exchange inflow/outflow, accumulation detection |
-| 🤖 AI Predictions | Ensemble prediction history with accuracy tracking |
-| ⚡ Signals & Alerts | Full signal breakdown with component scores |
-| ⏳ Backtesting | Strategy backtest with equity curve, Sharpe ratio, drawdown |
-| 📝 AI Reports | LLM-generated market reports (Mistral 7B) |
-| 🔍 Explainability | SHAP waterfall + feature importance visualization |
-| 📊 Model Performance | Accuracy tracking across models, coins, horizons |
+| ⚡ **Live Dashboard** | Multi-coin price ticker, Fear & Greed Index, real-time signal cards, market overview |
+| 📡 **Signals & Alerts** | Composite signal breakdown with radar chart (Sentiment × Tech × ML × On-Chain), confidence gating, multi-timeframe signal matrix (1h/4h/24h) |
+| 💬 **Sentiment Analysis** | Hourly sentiment timeline, bullish/bearish heatmap, narrative detection, news feed with LLM analysis |
+| 📈 **Price & Technicals** | OHLCV candlestick charts, RSI, MACD, Bollinger Bands, technical overlays |
+| 🐋 **On-Chain Intel** | Whale transaction log, exchange flow analysis, accumulation/distribution detection |
+| 🤖 **AI Predictions** | ML ensemble predictions with confidence gating, model validation accuracy chart, win/loss tracking |
+| 📊 **Model Performance** | Real validation accuracy across XGBoost/LSTM/AutoGluon/Ensemble, per-coin per-horizon breakdown |
+| ⏳ **Backtesting** | Strategy backtest with equity curve, Sharpe ratio, max drawdown, PnL analysis |
+| 📝 **AI Reports** | LLM-generated daily market intelligence reports via Ollama Mistral 7B |
 
 ---
 
-## ⚙️ Pipeline Schedule
+## 🔬 ML Pipeline
+
+### Ensemble Models
+
+| Model | Role | Best Accuracy |
+|-------|------|--------------|
+| **XGBoost** | Gradient-boosted tree classifier with 40+ engineered features | 70.4% (DOGE 24h) |
+| **LSTM** | 48-step sequential pattern detector (TensorFlow/Keras) | 69.2% (XRP 24h) |
+| **AutoGluon** | AutoML tabular learner with automatic feature selection | 70.4% (DOGE 24h) |
+| **Ensemble** | Weighted vote across all models with confidence calibration | 64.8% (DOGE 24h) |
+
+### Signal Generation
+
+Composite signals are generated using a weighted multi-factor scoring system:
+
+| Factor | Weight | Source |
+|--------|--------|--------|
+| Sentiment | 50% | Ollama LLM analysis of 700+ news articles |
+| Technicals | 25% | RSI + MACD + Bollinger Bands with confluence detection |
+| On-Chain | 15% | Whale flow analysis from Etherscan |
+| ML Prediction | 10% | Ensemble model directional forecast |
+
+### Confidence Gating
+
+Only predictions with **>55% confidence** generate actionable BUY/SELL signals. Lower-confidence predictions are marked as **NO TRADE** to improve win rate.
+
+---
+
+## ⚙️ Data Pipeline
 
 | Interval | Task |
 |----------|------|
-| 1 min | Price data (Binance) |
-| 2 min | On-chain whale data (Etherscan) |
-| 5 min | Reddit posts (PRAW) + Signal generation |
-| 10 min | News articles (NewsAPI / CryptoCompare) + Sentiment analysis |
+| Real-time | Price data from Binance WebSocket |
+| 5 min | Technical indicator computation |
+| 10 min | News scraping (NewsAPI / CryptoCompare) |
+| 10 min | Signal generation + prediction |
+| On-demand | LLM sentiment analysis (Ollama) |
 | 6 hours | Model retraining |
 
 ---
 
-## 🔬 ML Models & Stack
+## 🔑 API Keys
 
-| Model | Weight | Role |
-|-------|--------|------|
-| XGBoost | 45% | Primary classifier with 40+ features incl. sentiment + technical + on-chain |
-| Prophet | 30% | Time-series trend, seasonality, holiday effects |
-| LSTM | 25% | Sequential patterns via 48-step sliding window |
+| Service | Free Tier | Purpose |
+|---------|-----------|---------|
+| [Binance](https://www.binance.com) | Yes | OHLCV price data |
+| [NewsAPI](https://newsapi.org) | 100 req/day | News headlines |
+| [CryptoCompare](https://cryptocompare.com) | Yes | Additional news feed |
+| [Etherscan](https://etherscan.io/apis) | 5 req/sec | On-chain whale tracking |
 
-**Additional ML:** LightGBM, AutoGluon (tabular), Optuna hyperparameter optimization, SHAP explainability.
-
-**NLP:** Mistral 7B (GGUF, CPU/GPU via llama-cpp-python) + FinBERT for financial sentiment.
+All keys are optional — the system degrades gracefully with warnings.
 
 ---
 
-## 📦 Key Dependencies
+## 📁 Project Structure
 
 ```
-# ML
-xgboost, lightgbm, tensorflow, scikit-learn, autogluon, optuna, shap
-
-# NLP / LLM
-transformers, torch, llama-cpp-python (GGUF)
-
-# Data / On-chain
-praw, newsapi-python, web3, aiohttp
-
-# Dashboard
-streamlit, plotly, wordcloud
-
-# DB
-psycopg2, sqlalchemy (PostgreSQL with connection pooling)
+CryptoNerve/
+├── crypto-sentinel/            # Backend
+│   ├── api/main.py             # FastAPI endpoints (75+ routes)
+│   ├── ingestion/              # Data collectors (Binance, News, On-chain)
+│   ├── models/                 # ML model training (XGBoost, LSTM, AutoGluon)
+│   ├── sentiment/              # LLM sentiment engine (Ollama integration)
+│   ├── signals/                # Composite signal generator
+│   ├── features/               # Feature engineering (40+ indicators)
+│   ├── database/               # SQLite connection & schema
+│   ├── trained_models/         # Serialized model artifacts
+│   ├── scripts/                # Utility & maintenance scripts
+│   └── data/                   # SQLite database
+│
+├── crypto-sentinel-ui/         # Frontend
+│   ├── src/pages/              # React page components
+│   ├── src/components/         # Shared UI components
+│   ├── src/utils/              # API client & formatters
+│   └── vite.config.js          # Vite + API proxy config
+│
+└── start.bat                   # Windows one-click launcher
 ```
+
+---
+
+## 🖥️ Hardware Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU | i5-8300H | i7-10750H+ |
+| RAM | 8 GB | 16 GB |
+| GPU | — | GTX 1650+ (for Ollama) |
+| Storage | 2 GB | 5 GB |
 
 ---
 
 ## ⚠️ Disclaimer
 
-**This is for educational purposes only. Not financial advice.**  
-Crypto markets are highly volatile. Never invest more than you can afford to lose.
+**This is for educational and hackathon purposes only. Not financial advice.**  
+Crypto markets are highly volatile. Never invest more than you can afford to lose. All predictions are experimental and should not be used for actual trading decisions.
 
 ---
-*Crypto Sentinel v1.1 — Built with ❤️ using Python, Streamlit, PostgreSQL, and llama-cpp-python*
+
+*Crypto Sentinel v1.0 — Built with ❤️ for NMIMS Innovathon 2026*  
+*Python • React • FastAPI • XGBoost • LSTM • AutoGluon • Ollama Mistral 7B*

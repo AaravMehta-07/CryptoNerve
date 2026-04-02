@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently --names \"UI,API\" --prefix-colors \"cyan,yellow\" \"vite\" \"cd ../crypto-sentinel && set PYTHONIOENCODING=utf-8 && python -m uvicorn api.main:app --reload --reload-dir api --port 8000 --host 0.0.0.0\"",
+    "dev": "concurrently --names \"UI,API\" --prefix-colors \"cyan,yellow\" \"vite\" \"cd ../crypto-sentinel && set PYTHONIOENCODING=utf-8 && python -m uvicorn api.main:app --reload --reload-dir api --reload-exclude scripts --reload-exclude models --reload-exclude features --reload-exclude trained_models --port 8000 --host 0.0.0.0\"",
     "dev:ui": "vite",
-    "dev:api": "cd ../crypto-sentinel && python -m uvicorn api.main:app --reload --reload-dir api --port 8000 --host 0.0.0.0",
+    "dev:api": "cd ../crypto-sentinel && python -m uvicorn api.main:app --reload --reload-dir api --reload-exclude scripts --reload-exclude models --reload-exclude features --reload-exclude trained_models --port 8000 --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview"
   },

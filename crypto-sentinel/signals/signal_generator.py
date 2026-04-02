@@ -21,9 +21,29 @@ class SignalGenerator:
         self.engine = get_engine()
 
     def generate_signal(self, coin):
-        features_df = self.feature_engineer.build_training_features(coin, days=7)
-        ensemble = EnsemblePredictor(coin, horizon_hours=4)
-        prediction = ensemble.predict(features_df)
+        features_df = self.feature_engineer.build_prediction_features(coin, interval="1h", lookback_hours=72)
+
+        # Try all 3 horizons, use 1h as primary
+        prediction = None
+        all_predictions = {}
+        for h in [1, 4, 24]:
+            try:
+                ens = EnsemblePredictor(coin, horizon_hours=h)
+                ens.load_all()
+                feat_cols = [c for c in self.feature_engineer.get_feature_columns() if c in features_df.columns] if features_df is not None else []
+                pred = ens.predict(features_df[feat_cols] if features_df is not None and feat_cols else features_df)
+                if pred and pred.get("confidence", 0) > 0:
+                    all_predictions[f"{h}h"] = pred
+                    if h == 1:
+                        prediction = pred
+            except Exception as e:
+                logger.warning(f"Ensemble prediction {h}h for {coin}: {e}")
+
+        # Fallback: try 4h if 1h failed
+        if prediction is None and "4h" in all_predictions:
+            prediction = all_predictions["4h"]
+        elif prediction is None and "24h" in all_predictions:
+            prediction = all_predictions["24h"]
 
         if prediction is None:
             logger.warning(f"No prediction available for {coin}")
@@ -146,7 +166,7 @@ class SignalGenerator:
         try:
             pred_record = {
                 "coin": coin, "predicted_at": datetime.now(timezone.utc),
-                "horizon_hours": 4, "predicted_direction": prediction["direction"],
+                "horizon_hours": 1, "predicted_direction": prediction["direction"],
                 "confidence": prediction["confidence"], "model_name": "ensemble",
                 "features_used": json.dumps(list(prediction["individual_predictions"].keys())),
             }

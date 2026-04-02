@@ -205,7 +205,7 @@ def main():
             try:
                 conn.execute(text("""
                     INSERT OR IGNORE INTO news_articles
-                      (article_id,source,title,coin,published_at,url,sentiment_label,sentiment_score)
+                      (article_id,source_name,title,coin,published_at,url,sentiment_label,sentiment_score)
                     VALUES (:aid,:src,:t,:c,:pub,:url,:lbl,:s)
                 """), {
                     "aid": uid(title), "src": src, "t": title, "c": coin,

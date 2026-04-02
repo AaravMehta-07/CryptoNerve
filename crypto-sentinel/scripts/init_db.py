@@ -152,12 +152,13 @@ DDL = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         coin TEXT NOT NULL, narrative TEXT NOT NULL,
         source_type TEXT NOT NULL, mention_count INTEGER DEFAULT 0,
-        timestamp TEXT NOT NULL
+        timestamp TEXT NOT NULL,
+        UNIQUE(coin, narrative, timestamp)
     )""",
 
     """CREATE TABLE IF NOT EXISTS fear_greed_index (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL,
+        timestamp TEXT NOT NULL UNIQUE,
         index_value INTEGER NOT NULL,
         label TEXT NOT NULL,
         sentiment_component REAL, social_volume_component REAL,

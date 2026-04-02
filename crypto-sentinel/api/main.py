@@ -917,34 +917,175 @@ def _resolve_predictions():
 # ══════════════════════════════════════════════════════════════════════════════
 # SIGNAL GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
-def _classify_signal(sentiment: float, rsi: float, whale: float, n_articles: int) -> tuple[str, float, str]:
-    composite = (sentiment * 0.45) + ((1 - abs(rsi - 50) / 50) * 0.3) + (whale * 0.25)
+def _classify_signal(
+    sentiment: float,
+    rsi: float,
+    whale: float,
+    n_articles: int,
+    ml_prediction: dict = None,
+    macd_hist: float = None,
+    bb_position: float = None,
+) -> tuple[str, float, str]:
+    """
+    Unified composite signal generator.
+    
+    Weights (with ML):  Sentiment 50%  |  Technicals 25%  |  On-chain 15%  |  ML 10%
+    Weights (no ML):    Sentiment 55%  |  Technicals 30%  |  On-chain 15%
+    
+    Technical score uses RSI + MACD histogram + Bollinger Band position with
+    confluence detection for stronger conviction at extremes.
+    """
+    reasons = []
 
-    reasons = [
-        f"Sentiment: {sentiment:.3f}",
-        f"RSI: {rsi:.1f}",
-        f"Whale: {whale:.2f}",
-        f"Articles: {n_articles}",
-        f"Composite: {composite:.3f}",
-    ]
+    # ── 1. Sentiment score (0-1, already normalized) ──────────────────────────
+    sent_score = max(0.0, min(1.0, sentiment))
+    sent_label = "🟢 Bullish" if sent_score > 0.6 else "🔴 Bearish" if sent_score < 0.4 else "⚪ Neutral"
+    reasons.append(f"Sentiment: {sent_score:.3f} ({sent_label}, {n_articles} articles)")
 
+    # ── 2. Technical composite score (RSI + MACD + BB + Confluence) ─────────
+    # RSI component (0-1): oversold=bullish, overbought=bearish
+    # Sharper zones for stronger conviction at extremes
+    if rsi < 20:
+        rsi_score = 0.95   # deeply oversold → very strong bullish reversal
+    elif rsi < 28:
+        rsi_score = 0.85   # oversold → strong bullish
+    elif rsi < 35:
+        rsi_score = 0.70   # approaching oversold → bullish lean
+    elif rsi < 45:
+        rsi_score = 0.58   # slight bullish lean
+    elif rsi < 55:
+        rsi_score = 0.50   # neutral dead zone
+    elif rsi < 65:
+        rsi_score = 0.42   # slight bearish lean
+    elif rsi > 80:
+        rsi_score = 0.05   # deeply overbought → very strong bearish reversal
+    elif rsi > 72:
+        rsi_score = 0.15   # overbought → strong bearish
+    elif rsi > 65:
+        rsi_score = 0.30   # approaching overbought → bearish lean
+    else:
+        rsi_score = 0.50
+
+    # MACD histogram component (0-1): positive histogram = bullish momentum
+    # Use tanh-based scaling for smooth, bounded conversion
+    macd_score = 0.50
+    if macd_hist is not None:
+        import math
+        # Scale factor: small crypto MACD values get amplified, large ones saturate
+        scaled = math.tanh(macd_hist * 200)  # tanh maps (-inf,+inf) → (-1,+1)
+        macd_score = 0.50 + scaled * 0.40    # maps to (0.10, 0.90) range
+        macd_score = max(0.05, min(0.95, macd_score))
+
+    # Bollinger Band position component (0-1): near lower = bullish, near upper = bearish
+    # bb_position = (close - lower) / (upper - lower), range ~ 0-1
+    bb_score = 0.50
+    if bb_position is not None:
+        if bb_position < 0.05:
+            bb_score = 0.92   # below lower band → extreme bullish reversal
+        elif bb_position < 0.15:
+            bb_score = 0.80   # near lower band → strong bullish bounce
+        elif bb_position < 0.25:
+            bb_score = 0.68   # lower zone → bullish
+        elif bb_position < 0.40:
+            bb_score = 0.55   # slight bullish
+        elif bb_position > 0.95:
+            bb_score = 0.08   # above upper band → extreme bearish revert
+        elif bb_position > 0.85:
+            bb_score = 0.18   # near upper band → strong bearish
+        elif bb_position > 0.75:
+            bb_score = 0.32   # upper zone → bearish
+        elif bb_position > 0.60:
+            bb_score = 0.45   # slight bearish
+        else:
+            bb_score = 0.50   # neutral middle band
+
+    # Weighted technical composite (RSI 40% + MACD 30% + BB 30%)
+    tech_score = rsi_score * 0.40 + macd_score * 0.30 + bb_score * 0.30
+
+    # ── Confluence bonus: when RSI + BB both signal extremes, boost conviction ──
+    if rsi < 30 and bb_position is not None and bb_position < 0.20:
+        tech_score = min(0.95, tech_score + 0.08)  # RSI oversold + near lower BB = strong buy
+    elif rsi > 70 and bb_position is not None and bb_position > 0.80:
+        tech_score = max(0.05, tech_score - 0.08)  # RSI overbought + near upper BB = strong sell
+
+    tech_label = "🟢 Bullish" if tech_score > 0.6 else "🔴 Bearish" if tech_score < 0.4 else "⚪ Neutral"
+    reasons.append(f"Technicals: {tech_score:.3f} ({tech_label}, RSI: {rsi:.1f})")
+
+    # ── 3. ML prediction score (0-1) ─────────────────────────────────────────
+    ml_score = 0.50
+    has_ml = False
+    if ml_prediction and ml_prediction.get("confidence", 0) > 0:
+        has_ml = True
+        ml_dir = ml_prediction.get("direction", "SIDEWAYS")
+        ml_conf = ml_prediction.get("confidence", 0.5)
+        if ml_dir == "UP":
+            ml_score = 0.5 + (ml_conf - 0.5) * 1.0   # maps 0.5→0.5, 0.7→0.7, 0.9→0.9
+        elif ml_dir == "DOWN":
+            ml_score = 0.5 - (ml_conf - 0.5) * 1.0   # maps 0.5→0.5, 0.7→0.3, 0.9→0.1
+        else:
+            ml_score = 0.50
+        ml_score = max(0.05, min(0.95, ml_score))
+        reasons.append(f"ML Ensemble: {ml_score:.3f} ({ml_dir} @ {ml_conf:.0%}, {ml_prediction.get('models_used', '?')} models)")
+    else:
+        reasons.append("ML Ensemble: N/A (no trained models)")
+
+    # ── 4. On-chain / whale score (0-1) ──────────────────────────────────────
+    onchain_score = max(0.0, min(1.0, whale))
+    reasons.append(f"On-Chain: {onchain_score:.3f}")
+
+    # ── 5. Weighted composite ────────────────────────────────────────────────
+    if has_ml:
+        # Full system: sentiment 50% + technicals 25% + on-chain 15% + ML 10%
+        composite = (
+            sent_score     * 0.50 +
+            tech_score     * 0.25 +
+            onchain_score  * 0.15 +
+            ml_score       * 0.10
+        )
+        reasons.append(f"Composite: {composite:.3f} (Sent×50 + Tech×25 + Chain×15 + ML×10)")
+    else:
+        # Fallback: sentiment 55% + technicals 30% + on-chain 15%
+        composite = (
+            sent_score     * 0.55 +
+            tech_score     * 0.30 +
+            onchain_score  * 0.15
+        )
+        reasons.append(f"Composite: {composite:.3f} (Sent×55 + Tech×30 + Chain×15, no ML)")
+
+    # ── 6. Agreement bonus ───────────────────────────────────────────────────
+    # When multiple independent signals agree, boost confidence
+    bullish_count = sum(1 for s in [sent_score, ml_score, tech_score] if s > 0.58)
+    bearish_count = sum(1 for s in [sent_score, ml_score, tech_score] if s < 0.42)
+    if bullish_count >= 2 and composite > 0.55:
+        composite = min(0.95, composite + 0.05)
+        reasons.append(f"📈 Agreement bonus: +5% ({bullish_count}/3 bullish)")
+    elif bearish_count >= 2 and composite < 0.45:
+        composite = max(0.05, composite - 0.05)
+        reasons.append(f"📉 Agreement bonus: -5% ({bearish_count}/3 bearish)")
+
+    # ── 7. Signal classification ─────────────────────────────────────────────
     if composite >= 0.72:
         sig, conf = "STRONG_BUY", min(0.93, composite)
         reasons.append("=> STRONG BUY: Broad bullish alignment across all factors.")
     elif composite >= 0.58:
-        sig, conf = "BUY", min(0.80, composite + 0.04)
+        sig, conf = "BUY", min(0.82, composite + 0.02)
         reasons.append("=> BUY: Majority factors lean bullish.")
     elif composite <= 0.28:
         sig, conf = "STRONG_SELL", min(0.92, 1 - composite)
         reasons.append("=> STRONG SELL: Broad bearish alignment.")
     elif composite <= 0.42:
-        sig, conf = "SELL", min(0.77, 1 - composite + 0.04)
+        sig, conf = "SELL", min(0.79, 1 - composite + 0.02)
         reasons.append("=> SELL: Majority factors lean bearish.")
     else:
         sig, conf = "HOLD", 0.55
         reasons.append("=> HOLD: Mixed signals, no actionable edge.")
 
-    return sig, round(conf, 4), " | ".join(reasons)
+    return sig, round(conf, 4), " | ".join(reasons), {
+        "sent": round(sent_score, 4),
+        "ml": round(ml_score, 4),
+        "tech": round(tech_score, 4),
+        "onchain": round(onchain_score, 4),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1201,8 +1342,31 @@ def _run_analysis(coin: str, conn) -> dict:
         except Exception:
             pass
 
-    # ── 9. Generate signal ────────────────────────────────────────────────────
-    sig_type, confidence, reasoning = _classify_signal(avg_sent, rsi, whale, len(sentiments))
+    # ── 9. Generate signal (unified composite) ──────────────────────────────────
+    # Compute MACD histogram and BB position for technical scoring
+    _macd_hist = None
+    _bb_pos = None
+    if klines_1h and len(klines_1h) >= 35:
+        _closes = [k['close'] for k in klines_1h]
+        _macd_data = _compute_macd(_closes)
+        if _macd_data:
+            _, _, _macd_hist = _macd_data[-1]
+        _bb_data = _compute_bb(_closes)
+        if _bb_data:
+            _bu, _bm, _bl = _bb_data[-1]
+            _bb_range = _bu - _bl
+            if _bb_range > 0:
+                _bb_pos = (_closes[-1] - _bl) / _bb_range  # 0=lower band, 1=upper band
+
+    # Use 1h ML prediction as the primary signal input
+    _ml_pred_for_signal = ml_predictions.get("1h") if ml_predictions else None
+
+    sig_type, confidence, reasoning, component_scores = _classify_signal(
+        avg_sent, rsi, whale, len(sentiments),
+        ml_prediction=_ml_pred_for_signal,
+        macd_hist=_macd_hist,
+        bb_position=_bb_pos,
+    )
     if llm_reasonings:
         reasoning += " || LLM insights: " + " | ".join(llm_reasonings[:3])
     if ml_predictions:
@@ -1213,8 +1377,10 @@ def _run_analysis(coin: str, conn) -> dict:
             "sentiment_score,prediction_score,onchain_score,technical_score,divergence_signal,reasoning) "
             "VALUES (:coin,:sig,:conf,:ts,:price,:sent,:pred,:onch,:tech,:div,:reason)"
         ), {"coin": coin, "sig": sig_type, "conf": confidence, "ts": now_str, "price": price,
-             "sent": avg_sent, "pred": round(pred_conf if pred_dir == "UP" else (1 - pred_conf) if pred_dir == "DOWN" else 0.5, 4),
-             "onch": round(whale, 4), "tech": round(rsi / 100, 4),
+             "sent": component_scores["sent"],
+             "pred": component_scores["ml"],
+             "onch": component_scores["onchain"],
+             "tech": component_scores["tech"],
              "div": "NONE", "reason": reasoning[:2000]})
     except Exception as e:
         print(f"[Analyze] signal insert: {e}")
@@ -1368,7 +1534,7 @@ def get_sentiment_heatmap(hours: int = 12):
         SELECT coin,
                strftime('%Y-%m-%d %H:00:00', window_start) AS time_bucket,
                AVG(avg_sentiment) AS avg_sentiment
-        FROM sentiment_aggregated WHERE window_start>=:cutoff
+        FROM sentiment_aggregated WHERE window_start>=:cutoff AND window_size='1h'
         GROUP BY coin, strftime('%Y-%m-%d %H:00:00', window_start)
         ORDER BY time_bucket ASC
     """, eng(), params={"cutoff": time_ago(hours=hours)}))
@@ -1407,7 +1573,12 @@ def get_onchain(coin: str = "BTC", hours: int = 168):
 @app.get("/api/whales")
 def get_whales(coin: str = "BTC", limit: int = 20):
     return safe_records(pd.read_sql("""
-        SELECT tx_hash, value_usd, tx_type, direction,
+        SELECT tx_hash, value_usd, tx_type,
+               CASE
+                 WHEN is_exchange_to = 1 THEN 'in'
+                 WHEN is_exchange_from = 1 THEN 'out'
+                 ELSE 'transfer'
+               END as direction,
                is_exchange_from, is_exchange_to, block_time
         FROM whale_transactions WHERE token_symbol=:coin
         ORDER BY block_time DESC LIMIT :lim
@@ -1415,14 +1586,23 @@ def get_whales(coin: str = "BTC", limit: int = 20):
 
 
 @app.get("/api/predictions")
-def get_predictions(coin: str = None, horizon: int = 4, limit: int = 50):
-    sql = """
-        SELECT id, coin, model_name, horizon_hours, predicted_at,
-               predicted_direction, confidence, actual_direction,
-               was_correct, outcome_recorded_at
-        FROM predictions WHERE horizon_hours=:horizon
-    """
-    params = {"horizon": horizon, "lim": limit}
+def get_predictions(coin: str = None, horizon: int = 0, limit: int = 50):
+    if horizon > 0:
+        sql = """
+            SELECT id, coin, model_name, horizon_hours, predicted_at,
+                   predicted_direction, confidence, actual_direction,
+                   was_correct, outcome_recorded_at
+            FROM predictions WHERE horizon_hours=:horizon
+        """
+        params = {"horizon": horizon, "lim": limit}
+    else:
+        sql = """
+            SELECT id, coin, model_name, horizon_hours, predicted_at,
+                   predicted_direction, confidence, actual_direction,
+                   was_correct, outcome_recorded_at
+            FROM predictions WHERE 1=1
+        """
+        params = {"lim": limit}
     if coin:
         sql += " AND coin=:coin"; params["coin"] = coin
     sql += " ORDER BY predicted_at DESC LIMIT :lim"
@@ -1444,7 +1624,7 @@ def get_fear_greed(hours: int = 48):
 @app.get("/api/model-accuracy")
 def get_model_accuracy():
     return safe_records(pd.read_sql("""
-        SELECT coin, model_name, accuracy, precision, recall, f1_score, sharpe
+        SELECT coin, model_name, accuracy, precision, recall, f1_score, sharpe, horizon_h
         FROM model_accuracy ORDER BY accuracy DESC
     """, eng()))
 
@@ -1481,6 +1661,291 @@ def get_reports(limit: int = 10):
                SUBSTR(report_text,1,2000) as report_text
         FROM market_reports ORDER BY generated_at DESC LIMIT :lim
     """, eng(), params={"lim": limit}))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HISTORICAL BACKTESTING (server-side, uses trained ML models)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/backtest")
+def run_backtest(coin: str = "BTC", days: int = 90):
+    """
+    Walk-forward backtest: replay historical candles through the full composite
+    scoring system (ML ensemble + technicals + sentiment + on-chain).
+    
+    - Builds 6 months of features from DB
+    - Batch-predicts with AutoGluon/XGBoost/LSTM ensemble
+    - Computes composite score at each candle
+    - Simulates trades with 30% position sizing
+    """
+    coin = coin.upper()
+    days = min(days, 180)  # cap at 6 months
+
+    try:
+        from features.feature_engineer import FeatureEngineer as FE
+        from models.ensemble import EnsemblePredictor
+        import numpy as np
+
+        fe = FE()
+        df = fe.build_training_features(coin, interval="1h", days=days)
+        if df is None or len(df) < 50:
+            return JSONResponse(status_code=400, content={
+                "error": f"Not enough historical data for {coin} ({len(df) if df is not None else 0} rows)"
+            })
+
+        feat_cols = [c for c in fe.get_feature_columns() if c in df.columns]
+        X = df[feat_cols].fillna(0).replace([np.inf, -np.inf], 0)
+
+        # ── 1. ML ensemble batch predictions ──────────────────────────────────
+        ml_directions = ["SIDEWAYS"] * len(df)
+        ml_confidences = [0.0] * len(df)
+        ml_available = False
+
+        try:
+            ens = EnsemblePredictor(coin, horizon_hours=1)
+            ens.load_all()
+
+            # AutoGluon batch predict
+            ag_probs = np.full(len(df), 0.5)
+            try:
+                ag_pred = ens.models["autogluon"].predictor
+                if ag_pred is not None:
+                    import json as _json
+                    meta_path = os.path.join(ens.models["autogluon"].model_dir, "meta.json")
+                    with open(meta_path) as _f:
+                        ag_feats = [c for c in _json.load(_f)["features"] if c in X.columns]
+                    proba = ag_pred.predict_proba(X[ag_feats])
+                    ag_probs = proba[1].values if 1 in proba.columns else np.full(len(df), 0.5)
+                    ml_available = True
+            except Exception as _e:
+                print(f"[Backtest] AG batch: {_e}")
+
+            # XGBoost batch predict
+            xgb_probs = np.full(len(df), 0.5)
+            try:
+                xgb_model = ens.models["xgboost"].model
+                if xgb_model is not None:
+                    xgb_feats = [c for c in ens.models["xgboost"].feature_columns if c in X.columns]
+                    proba = xgb_model.predict_proba(X[xgb_feats].fillna(0))
+                    xgb_probs = proba[:, 1]
+                    ml_available = True
+            except Exception as _e:
+                print(f"[Backtest] XGB batch: {_e}")
+
+            # LSTM sliding window predict
+            lstm_probs = np.full(len(df), 0.5)
+            try:
+                lstm_model = ens.models["lstm"]
+                if lstm_model.model is not None:
+                    seq_len = lstm_model.sequence_length
+                    lstm_feats = [c for c in lstm_model.feature_columns if c in X.columns]
+                    normalized = lstm_model._apply_normalize(X, lstm_feats)
+                    Xn = normalized[lstm_feats].values
+                    for i in range(seq_len, len(df)):
+                        window = Xn[i - seq_len:i].reshape(1, seq_len, len(lstm_feats))
+                        prob = float(lstm_model.model.predict(window, verbose=0)[0][0])
+                        lstm_probs[i] = prob
+                    ml_available = True
+            except Exception as _e:
+                print(f"[Backtest] LSTM batch: {_e}")
+
+            # Weighted ensemble
+            if ml_available:
+                w = ens.weights
+                w_ag = w.get("autogluon", 0.45)
+                w_xgb = w.get("xgboost", 0.25)
+                w_lstm = w.get("lstm", 0.30)
+                w_total = w_ag + w_xgb + w_lstm
+                combined = (ag_probs * w_ag + xgb_probs * w_xgb + lstm_probs * w_lstm) / w_total
+                for i in range(len(df)):
+                    if combined[i] > 0.52:
+                        ml_directions[i] = "UP"
+                        ml_confidences[i] = float(combined[i])
+                    elif combined[i] < 0.48:
+                        ml_directions[i] = "DOWN"
+                        ml_confidences[i] = float(1 - combined[i])
+                    else:
+                        ml_directions[i] = "SIDEWAYS"
+                        ml_confidences[i] = 0.5
+
+        except Exception as _e:
+            print(f"[Backtest] ML ensemble: {_e}")
+
+        # ── 2. Generate composite signals at each candle ────────────────────
+        signals = []
+        closes = df["close"].values
+        timestamps = df.index if hasattr(df.index, 'strftime') else range(len(df))
+
+        for i in range(35, len(df)):  # skip warmup period for indicators
+            # Sentiment — use real Ollama data when available, else momentum-based proxy
+            sent = 0.5
+            has_real_sentiment = False
+            if "avg_sentiment" in df.columns:
+                raw = float(df["avg_sentiment"].iloc[i])
+                if raw > 0.01:
+                    sent = raw
+                    has_real_sentiment = True
+
+            if not has_real_sentiment:
+                # Momentum-based sentiment proxy (simulates market mood from price action)
+                # Uses 6h price momentum + volume ratio to estimate market sentiment
+                mom_6h = float(df["price_mom_6h"].iloc[i]) if "price_mom_6h" in df.columns else 0.0
+                vol_ratio = float(df["volume_ratio"].iloc[i]) if "volume_ratio" in df.columns else 1.0
+
+                import math
+                # Map 6h momentum to sentiment: +3% → 0.85, -3% → 0.15, 0% → 0.50
+                mom_signal = 0.5 + math.tanh(mom_6h * 30) * 0.35
+                # Volume confirmation: high volume amplifies momentum signal away from neutral
+                vol_boost = min(1.3, max(0.7, vol_ratio)) - 1.0  # -0.3 to +0.3
+                sent = max(0.05, min(0.95, mom_signal + vol_boost * 0.1))
+
+            # RSI
+            rsi = float(df["rsi"].iloc[i]) if "rsi" in df.columns else 50.0
+
+            # MACD histogram
+            macd_hist = float(df["macd_histogram"].iloc[i]) if "macd_histogram" in df.columns else None
+
+            # Bollinger Band position
+            bb_pos = None
+            if "bb_upper" in df.columns and "bb_lower" in df.columns:
+                bu = float(df["bb_upper"].iloc[i])
+                bl = float(df["bb_lower"].iloc[i])
+                if bu - bl > 0:
+                    bb_pos = (closes[i] - bl) / (bu - bl)
+
+            # On-chain
+            whale = float(df["whale_activity_score"].iloc[i]) if "whale_activity_score" in df.columns else 0.5
+
+            # ML prediction
+            ml_pred = None
+            if ml_available and ml_confidences[i] > 0:
+                ml_pred = {"direction": ml_directions[i], "confidence": ml_confidences[i], "models_used": 3}
+
+            sig_type, conf, reasoning, _scores = _classify_signal(
+                sent, rsi, whale, 0,
+                ml_prediction=ml_pred,
+                macd_hist=macd_hist,
+                bb_position=bb_pos,
+            )
+
+            ts_str = str(timestamps[i])[:16] if hasattr(timestamps[i], 'strftime') else str(timestamps[i])
+
+            signals.append({
+                "idx": i,
+                "time": ts_str,
+                "price": float(closes[i]),
+                "signal": sig_type,
+                "confidence": conf,
+                "ml_dir": ml_directions[i],
+                "sentiment": round(sent, 3),
+                "rsi": round(rsi, 1),
+            })
+
+        # ── 3. Simulate trades ──────────────────────────────────────────────
+        initial = 10000.0
+        equity = initial
+        position_size = 0.30  # 30% of equity per trade
+        trades = []
+        equity_curve = []
+        wins = 0
+        losses = 0
+        peak = equity
+        max_dd = 0.0
+
+        i = 0
+        while i < len(signals) - 1:
+            s = signals[i]
+            is_buy = "BUY" in s["signal"]
+            is_sell = "SELL" in s["signal"]
+
+            if not is_buy and not is_sell:
+                equity_curve.append({"time": s["time"], "equity": round(equity, 2)})
+                i += 1
+                continue
+
+            entry_price = s["price"]
+            entry_conf = s["confidence"]
+
+            # Find exit: opposite signal, HOLD, or N candles later
+            exit_idx = i + 1
+            while exit_idx < len(signals):
+                es = signals[exit_idx]
+                # Exit on opposite signal or after 24 candles (24h max hold)
+                if (is_buy and "SELL" in es["signal"]) or \
+                   (is_sell and "BUY" in es["signal"]) or \
+                   es["signal"] == "HOLD" or \
+                   (exit_idx - i) >= 24:
+                    break
+                exit_idx += 1
+
+            if exit_idx >= len(signals):
+                break
+
+            exit_price = signals[exit_idx]["price"]
+            pct_change = (exit_price - entry_price) / entry_price
+            pnl = equity * position_size * (pct_change if is_buy else -pct_change)
+
+            equity += pnl
+            if equity > peak:
+                peak = equity
+            dd = (peak - equity) / peak * 100
+            if dd > max_dd:
+                max_dd = dd
+
+            if pnl > 0:
+                wins += 1
+            else:
+                losses += 1
+
+            trades.append({
+                "entry_time": s["time"],
+                "exit_time": signals[exit_idx]["time"],
+                "signal_type": s["signal"],
+                "entry_price": round(entry_price, 6),
+                "exit_price": round(exit_price, 6),
+                "pnl": round(pnl, 2),
+                "pnl_pct": round(pct_change * 100 if is_buy else -pct_change * 100, 3),
+                "confidence": entry_conf,
+                "ml_direction": s["ml_dir"],
+            })
+            equity_curve.append({"time": s["time"], "equity": round(equity, 2)})
+            i = exit_idx + 1
+
+        # Sharpe
+        returns = [t["pnl_pct"] / 100 for t in trades]
+        if len(returns) > 1:
+            mu = sum(returns) / len(returns)
+            sigma = (sum((r - mu) ** 2 for r in returns) / (len(returns) - 1)) ** 0.5
+            sharpe = (mu / sigma) * (252 ** 0.5) if sigma > 0 else 0
+        else:
+            sharpe = 0
+
+        total_trades = len(trades)
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
+        return {
+            "coin": coin,
+            "days": days,
+            "candles_analyzed": len(signals),
+            "ml_models_used": ml_available,
+            "initial_capital": initial,
+            "final_capital": round(equity, 2),
+            "total_return_pct": round((equity - initial) / initial * 100, 2),
+            "total_trades": total_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(win_rate, 1),
+            "max_drawdown_pct": round(max_dd, 2),
+            "sharpe_ratio": round(sharpe, 2),
+            "equity_curve": equity_curve[-200:],  # limit payload
+            "trades": trades[-30:],  # last 30 trades
+        }
+
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={
+            "error": str(e), "trace": traceback.format_exc()[-600:]
+        })
 
 
 if __name__ == "__main__":

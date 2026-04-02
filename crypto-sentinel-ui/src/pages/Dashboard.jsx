@@ -110,12 +110,30 @@ function AnalysisBanner({ result, onDismiss, currCtx }) {
           🟢{result.bullish || 0} bullish · 🔴{result.bearish || 0} bearish · ⚪{result.neutral || 0} neutral
           {result.llm_model && <> · 🤖 {result.llm_model}</>}
         </div>
-        {result.prediction && (
+        {/* Multi-horizon ML predictions */}
+        {result.ml_predictions ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>🧠 ML Ensemble:</span>
+            {Object.entries(result.ml_predictions).map(([h, p]) => {
+              const dirColor = p.direction === 'UP' ? '#00FF9C' : p.direction === 'DOWN' ? '#FF4C4C' : '#4C9BE8'
+              const arrow = p.direction === 'UP' ? '↑' : p.direction === 'DOWN' ? '↓' : '→'
+              return (
+                <span key={h} style={{
+                  fontSize: '0.65rem', fontFamily: 'var(--font-mono)',
+                  background: `${dirColor}15`, border: `1px solid ${dirColor}44`,
+                  borderRadius: 6, padding: '2px 8px', color: dirColor, fontWeight: 700,
+                }}>
+                  {h} {arrow} {p.direction} ({(p.confidence * 100).toFixed(0)}%)
+                </span>
+              )
+            })}
+          </div>
+        ) : result.prediction ? (
           <div style={{ fontSize: '0.68rem', color: 'var(--text-2)', marginTop: 2 }}>
-            📈 Prediction: {result.prediction}
+            📊 Rule-Based: {result.prediction}
             {result.prediction_confidence && ` (${(result.prediction_confidence * 100).toFixed(1)}% confidence)`}
           </div>
-        )}
+        ) : null}
         <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 4, maxWidth: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>
           📋 {result.reasoning}
         </div>

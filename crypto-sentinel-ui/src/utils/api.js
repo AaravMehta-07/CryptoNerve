@@ -24,6 +24,7 @@ export const api = {
   narratives:       (coin, hours = 24)           => get('/narratives', { coin, hours }),
   news:             (hours = 48, limit = 20, coin = null) => get('/news', coin ? { hours, limit, coin } : { hours, limit }),
   reports:          (limit = 10)                 => get('/reports', { limit }),
+  backtest:         (coin, days)                 => get('/backtest', { coin, days }),
 }
 
 // Binance live price
