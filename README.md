@@ -85,7 +85,7 @@ cd CryptoNerve
 ```bash
 cd crypto-sentinel
 pip install -r requirements.txt
-cp .env.example .env        # add your API keys
+cp .env.example .env        # add your API keys here
 python scripts/init_db.py   # initialise the SQLite database
 ```
 
