@@ -1,6 +1,6 @@
 # 🛡️ Crypto Sentinel — AI Market Intelligence Terminal
-
-
+> **Self-hosted LLM-powered crypto sentiment & price prediction terminal**  
+> Real-time market intelligence for BTC, ETH, SOL, XRP & DOGE — powered by ensemble ML models, Ollama Mistral 7B sentiment analysis, on-chain whale tracking, and composite confidence-gated trading signals.
 
 **🏆 NMIMS Innovathon 2026**
 
